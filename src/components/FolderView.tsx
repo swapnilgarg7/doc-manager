@@ -48,7 +48,7 @@ import {
   DownloadIcon,
   ClockIcon,
 } from "./icons";
-import { formatBytes, formatDateShort } from "@/lib/format";
+import { formatBytes, formatDateShort, documentDisplayName } from "@/lib/format";
 
 export function FolderView({ folderId }: { folderId: string }) {
   const [data, setData] = useState<FolderContents | null>(null);
@@ -340,7 +340,7 @@ export function FolderView({ folderId }: { folderId: string }) {
               <DocumentRow
                 key={doc.id}
                 doc={doc}
-                onPreview={(rev) => setPreview({ rev, name: doc.name })}
+                onPreview={(rev) => setPreview({ rev, name: documentDisplayName(doc) })}
                 onUpload={() => setUploadTo(doc)}
                 onRename={() => setRenameDoc(doc)}
                 onDelete={() => setDeleteDoc(doc)}
@@ -498,7 +498,7 @@ function DocumentRow({
             href={`/documents/${doc.id}`}
             className="truncate font-medium text-slate-900 hover:text-brand-600 hover:underline"
           >
-            {doc.name}
+            {documentDisplayName(doc)}
           </Link>
           {latest ? (
             <span className="badge-green">Rev {latest.revision_number}</span>
@@ -631,7 +631,7 @@ function SearchResults({
                     href={`/documents/${doc.id}`}
                     className="truncate font-medium text-slate-900 hover:text-brand-600 hover:underline"
                   >
-                    {doc.name}
+                    {documentDisplayName(doc)}
                   </Link>
                   {latest && (
                     <span className="badge-green">
@@ -643,9 +643,9 @@ function SearchResults({
                     {folderName}
                   </span>
                 </div>
-                {doc.drawing_title && doc.drawing_title !== doc.name && (
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    {doc.drawing_title}
+                {documentDisplayName(doc) !== doc.name && (
+                  <p className="mt-0.5 truncate text-xs text-slate-400">
+                    {doc.name}
                   </p>
                 )}
                 {doc.tags.length > 0 && (
@@ -658,7 +658,7 @@ function SearchResults({
                 {latest && (
                   <>
                     <button
-                      onClick={() => onPreview(latest, doc.name)}
+                      onClick={() => onPreview(latest, documentDisplayName(doc))}
                       className="btn-ghost px-2"
                       title="Preview current revision"
                     >

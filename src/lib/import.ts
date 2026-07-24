@@ -2,9 +2,28 @@ import {
   findOrCreateFolder,
   findDocument,
   createDocument,
+  deleteDocument,
   uploadRevision,
 } from "@/lib/api";
 import { tagDocument } from "@/lib/tags";
+
+/** Run async jobs with a bounded number in flight at once. */
+async function runPool(
+  jobs: (() => Promise<unknown>)[],
+  concurrency: number
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, jobs.length) },
+    async () => {
+      while (next < jobs.length) {
+        const job = jobs[next++];
+        await job();
+      }
+    }
+  );
+  await Promise.all(workers);
+}
 
 // Uses the standard File & Directory Entries API (FileSystemEntry and friends
 // are provided by the DOM lib) exposed via DataTransferItem.webkitGetAsEntry().
@@ -155,9 +174,10 @@ export async function importIntoFolder(
     addedRevisions: 0,
     failures: [],
   };
-  // AI tagging runs in the background so it doesn't slow the uploads; we await
-  // all of them once the files are in.
-  const tagging: Promise<unknown>[] = [];
+  // AI tagging is deferred and run through a small concurrency pool once the
+  // files are uploaded — firing every request at once makes Azure OpenAI
+  // rate-limit (429) and silently drop most tags.
+  const tagJobs: (() => Promise<unknown>)[] = [];
 
   async function walk(folderId: string, n: ImportNode, path: string) {
     for (const file of n.files) {
@@ -167,18 +187,26 @@ export async function importIntoFolder(
         const docName = stripExtension(file.name);
         const existing = await findDocument(folderId, docName);
         let documentId: string;
+        let revPath: string;
         if (existing) {
           const rev = await uploadRevision(existing.id, file, "Imported revision");
           documentId = existing.id;
+          revPath = rev.file_path;
           result.addedRevisions += 1;
-          tagging.push(tagDocument(documentId, rev.file_path, file.name));
         } else {
           const doc = await createDocument(folderId, docName);
-          const rev = await uploadRevision(doc.id, file, "Imported");
-          documentId = doc.id;
+          try {
+            const rev = await uploadRevision(doc.id, file, "Imported");
+            documentId = doc.id;
+            revPath = rev.file_path;
+          } catch (err) {
+            // Don't leave an empty document behind if the upload failed.
+            await deleteDocument(doc.id).catch(() => {});
+            throw err;
+          }
           result.createdDocuments += 1;
-          tagging.push(tagDocument(documentId, rev.file_path, file.name));
         }
+        tagJobs.push(() => tagDocument(documentId, revPath, file.name));
         result.uploaded += 1;
         onProgress({ done: result.uploaded, total, current: filePath });
       } catch (err) {
@@ -195,6 +223,6 @@ export async function importIntoFolder(
   }
 
   await walk(targetFolderId, node, "");
-  await Promise.allSettled(tagging);
+  await runPool(tagJobs, 3);
   return result;
 }

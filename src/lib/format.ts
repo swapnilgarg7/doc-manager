@@ -1,3 +1,15 @@
+/**
+ * The name to show for a document. Once the AI has extracted the drawing's
+ * title from its title block, that becomes the document's headline; until then
+ * (or if extraction failed) we fall back to the uploaded name.
+ */
+export function documentDisplayName(doc: {
+  name: string;
+  drawing_title?: string | null;
+}): string {
+  return doc.drawing_title?.trim() || doc.name;
+}
+
 export function formatBytes(bytes: number | null | undefined): string {
   if (!bytes && bytes !== 0) return "—";
   if (bytes === 0) return "0 B";

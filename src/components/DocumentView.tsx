@@ -27,7 +27,7 @@ import {
   TrashIcon,
   ClockIcon,
 } from "./icons";
-import { formatBytes, formatDate } from "@/lib/format";
+import { formatBytes, formatDate, documentDisplayName } from "@/lib/format";
 
 export function DocumentView({ documentId }: { documentId: string }) {
   const [doc, setDoc] = useState<DocumentWithRevisions | null>(null);
@@ -83,10 +83,11 @@ export function DocumentView({ documentId }: { documentId: string }) {
 
   const latest = doc.latest;
   const archived = doc.revisions.slice(1); // everything but the newest
+  const displayName = documentDisplayName(doc);
 
   return (
     <div className="space-y-6">
-      <Breadcrumbs trail={trail} currentName={doc.name} />
+      <Breadcrumbs trail={trail} currentName={displayName} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -95,10 +96,10 @@ export function DocumentView({ documentId }: { documentId: string }) {
           </span>
           <div>
             <h1 className="text-xl font-semibold tracking-tight text-slate-900">
-              {doc.name}
+              {displayName}
             </h1>
-            {doc.drawing_title && doc.drawing_title !== doc.name && (
-              <p className="text-sm text-slate-500">{doc.drawing_title}</p>
+            {displayName !== doc.name && (
+              <p className="text-sm text-slate-400">{doc.name}</p>
             )}
             <p className="text-sm text-slate-400">
               {doc.revisions.length} revision
@@ -290,7 +291,7 @@ export function DocumentView({ documentId }: { documentId: string }) {
 
       <FilePreview
         revision={preview}
-        documentName={doc.name}
+        documentName={displayName}
         onClose={() => setPreview(null)}
       />
     </div>
