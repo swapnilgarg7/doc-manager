@@ -34,6 +34,7 @@ import {
   type ImportNode,
 } from "@/lib/import";
 import { tagDocument } from "@/lib/tags";
+import { retagUntagged } from "@/lib/retag";
 import { TagBadges } from "./TagBadges";
 import { SearchIcon, CloseIcon } from "./icons";
 import {
@@ -47,6 +48,7 @@ import {
   EyeIcon,
   DownloadIcon,
   ClockIcon,
+  TagIcon,
 } from "./icons";
 import { formatBytes, formatDateShort, documentDisplayName } from "@/lib/format";
 
@@ -79,6 +81,38 @@ export function FolderView({ folderId }: { folderId: string }) {
   const [subtree, setSubtree] = useState<SearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
 
+  // "Tag untagged" — backfill any docs in this subtree still missing tags.
+  const [retagging, setRetagging] = useState(false);
+  const [retagProgress, setRetagProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [retagMsg, setRetagMsg] = useState<string | null>(null);
+
+  async function handleRetag() {
+    setRetagging(true);
+    setRetagMsg(null);
+    setRetagProgress({ done: 0, total: 0 });
+    try {
+      const res = await retagUntagged(folderId, setRetagProgress);
+      if (res.total === 0) {
+        setRetagMsg("Everything here is already tagged.");
+      } else {
+        setRetagMsg(
+          `Tagged ${res.tagged} of ${res.total} document${
+            res.total === 1 ? "" : "s"
+          }${res.failed ? ` · ${res.failed} still failed (try again)` : ""}.`
+        );
+      }
+      await load();
+    } catch (err) {
+      setRetagMsg(err instanceof Error ? err.message : "Tagging failed.");
+    } finally {
+      setRetagging(false);
+      setRetagProgress(null);
+    }
+  }
+
   async function onSearchChange(value: string) {
     setQuery(value);
     // Lazily fetch the subtree the first time the user searches.
@@ -106,8 +140,7 @@ export function FolderView({ folderId }: { folderId: string }) {
   }, [folderId]);
 
   useEffect(() => {
-    // load() only setStates after awaiting its fetch; safe, intentional suppression.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // load() only setStates after awaiting its fetch — safe to call in effect.
     load();
   }, [load]);
 
@@ -212,6 +245,19 @@ export function FolderView({ folderId }: { folderId: string }) {
           </h1>
         </div>
         <div className="flex gap-2">
+          <button
+            className="btn-secondary"
+            onClick={handleRetag}
+            disabled={retagging}
+            title="Find every document here (and in subfolders) still missing a title/tags and tag it"
+          >
+            <TagIcon width={16} height={16} />
+            {retagging
+              ? `Tagging… ${retagProgress?.done ?? 0}/${
+                  retagProgress?.total ?? 0
+                }`
+              : "Tag untagged"}
+          </button>
           <button className="btn-secondary" onClick={() => setNewSub(true)}>
             <PlusIcon width={16} height={16} />
             New category
@@ -226,6 +272,9 @@ export function FolderView({ folderId }: { folderId: string }) {
       <p className="-mt-2 text-xs text-slate-400">
         Tip: drag a folder from your computer anywhere onto this page to import
         its whole structure at once.
+        {retagMsg && (
+          <span className="ml-1 font-medium text-brand-600">{retagMsg}</span>
+        )}
       </p>
 
       {/* Search — matches document names, parsed titles, and AI tags */}

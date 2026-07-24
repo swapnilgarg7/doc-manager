@@ -6,24 +6,7 @@ import {
   uploadRevision,
 } from "@/lib/api";
 import { tagDocument } from "@/lib/tags";
-
-/** Run async jobs with a bounded number in flight at once. */
-async function runPool(
-  jobs: (() => Promise<unknown>)[],
-  concurrency: number
-): Promise<void> {
-  let next = 0;
-  const workers = Array.from(
-    { length: Math.min(concurrency, jobs.length) },
-    async () => {
-      while (next < jobs.length) {
-        const job = jobs[next++];
-        await job();
-      }
-    }
-  );
-  await Promise.all(workers);
-}
+import { runPool } from "@/lib/pool";
 
 // Uses the standard File & Directory Entries API (FileSystemEntry and friends
 // are provided by the DOM lib) exposed via DataTransferItem.webkitGetAsEntry().

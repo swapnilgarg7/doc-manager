@@ -118,3 +118,12 @@ export function ClockIcon(p: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+export function TagIcon(p: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...p}>
+      <path d="M3 7v4.6a2 2 0 0 0 .6 1.4l7.4 7.4a2 2 0 0 0 2.8 0l4.6-4.6a2 2 0 0 0 0-2.8L11 5.6A2 2 0 0 0 9.6 5H5a2 2 0 0 0-2 2Z" />
+      <circle cx="7.5" cy="9.5" r="1.2" />
+    </svg>
+  );
+}

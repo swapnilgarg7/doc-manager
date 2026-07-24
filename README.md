@@ -147,6 +147,11 @@ Explorer:
   the same query means "within this category".
 - Missed or wrong? Open the document and hit **Retag** to re-run extraction on
   the current revision.
+- Bulk-imported a lot at once? Tagging runs in the background through a small
+  request pool (with automatic retry on rate-limits) so large drops tag
+  reliably. If a batch was interrupted (e.g. the tab was closed mid-run), click
+  **Tag untagged** on any folder to find every document in it — and everything
+  nested under it — that's still missing a title/tags and fill them in.
 
 > Non-PDF files are stored but not tagged.
 
