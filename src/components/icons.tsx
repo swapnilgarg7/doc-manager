@@ -101,6 +101,15 @@ export function HomeIcon(p: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function SearchIcon(p: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...p}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}
+
 export function ClockIcon(p: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...p}>

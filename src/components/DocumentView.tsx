@@ -13,10 +13,12 @@ import type {
   Folder,
   Revision,
 } from "@/lib/types";
+import { tagDocument } from "@/lib/tags";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { UploadDialog } from "./UploadDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { FilePreview } from "./FilePreview";
+import { TagBadges } from "./TagBadges";
 import {
   FileIcon,
   UploadIcon,
@@ -36,6 +38,7 @@ export function DocumentView({ documentId }: { documentId: string }) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [preview, setPreview] = useState<Revision | null>(null);
   const [deleteRev, setDeleteRev] = useState<Revision | null>(null);
+  const [retagging, setRetagging] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -94,17 +97,42 @@ export function DocumentView({ documentId }: { documentId: string }) {
             <h1 className="text-xl font-semibold tracking-tight text-slate-900">
               {doc.name}
             </h1>
+            {doc.drawing_title && doc.drawing_title !== doc.name && (
+              <p className="text-sm text-slate-500">{doc.drawing_title}</p>
+            )}
             <p className="text-sm text-slate-400">
               {doc.revisions.length} revision
               {doc.revisions.length === 1 ? "" : "s"}
             </p>
           </div>
         </div>
-        <button className="btn-primary" onClick={() => setUploadOpen(true)}>
-          <UploadIcon width={16} height={16} />
-          Upload new revision
-        </button>
+        <div className="flex gap-2">
+          {latest && (
+            <button
+              className="btn-secondary"
+              disabled={retagging}
+              onClick={async () => {
+                setRetagging(true);
+                try {
+                  await tagDocument(doc.id, latest.file_path, latest.file_name);
+                  await load();
+                } finally {
+                  setRetagging(false);
+                }
+              }}
+              title="Re-run title & tag extraction on the current revision"
+            >
+              {retagging ? "Tagging…" : "Retag"}
+            </button>
+          )}
+          <button className="btn-primary" onClick={() => setUploadOpen(true)}>
+            <UploadIcon width={16} height={16} />
+            Upload new revision
+          </button>
+        </div>
       </div>
+
+      {doc.tags.length > 0 && <TagBadges tags={doc.tags} />}
 
       {/* Current revision — highlighted */}
       {latest ? (
@@ -238,7 +266,8 @@ export function DocumentView({ documentId }: { documentId: string }) {
         submitLabel="Upload revision"
         onClose={() => setUploadOpen(false)}
         onSubmit={async ({ file, notes }) => {
-          await uploadRevision(doc.id, file, notes);
+          const rev = await uploadRevision(doc.id, file, notes);
+          await tagDocument(doc.id, rev.file_path, file.name);
           await load();
         }}
       />

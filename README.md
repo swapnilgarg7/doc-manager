@@ -17,6 +17,13 @@ an **archive** you can still preview or download.
   onto a section (or into any folder) and the whole subfolder tree + files are
   recreated automatically. Re-dropping an updated folder adds new **revisions**
   to matching documents instead of duplicating them.
+- 🏷️ **Automatic AI tagging** — on upload, the PDF's title block (bottom-right)
+  is parsed deterministically with pdfjs, then Azure OpenAI extracts the exact
+  **drawing title** and assigns **classification tags** (Plumbing, Drainage,
+  Structural, …).
+- 🔎 **Category-scoped search** — search within a folder (and everything nested
+  under it) by document name, drawing title, or tag. Search "Plumbing" inside
+  _Port-a-Cabin_ and only that folder's plumbing drawings come up.
 - 📄 **Documents with revision control** — newest upload is always "main", older
   revisions are archived automatically (never deleted unless you say so)
 - 👁️ **In-browser preview** for PDFs and images, plus one-click download
@@ -60,6 +67,12 @@ cp .env.local.example .env.local
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR-ANON-PUBLIC-KEY
+
+# Azure OpenAI — powers title extraction + tagging (server-side only)
+AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com/
+AZURE_OPENAI_DEPLOYMENT=gpt-5.4-mini
+AZURE_OPENAI_API_VERSION=2024-12-01-preview
+AZURE_OPENAI_API_KEY=YOUR-AZURE-OPENAI-KEY
 ```
 
 ### 4. Create the database schema
@@ -67,10 +80,15 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR-ANON-PUBLIC-KEY
 Open the Supabase Dashboard → **SQL Editor** → **New query**, paste the contents
 of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This will:
 
-- create the `folders`, `documents`, and `revisions` tables
+- create the `folders`, `documents`, and `revisions` tables (documents include
+  `drawing_title` + `tags` columns for AI tagging/search)
 - create the public **`documents`** storage bucket
 - set permissive access policies (no auth yet — see the note below)
 - seed two starter sections: **Drawings** and **Materials**
+
+> **Already ran an earlier version of `schema.sql`?** Run the incremental
+> migration [`supabase/migrations/0002_document_tags.sql`](./supabase/migrations/0002_document_tags.sql)
+> to add the `drawing_title` and `tags` columns.
 
 ### 5. Run the app
 
@@ -112,6 +130,35 @@ Explorer:
 
 > Folder drag-and-drop uses the browser's File & Directory Entries API, which
 > works in Chrome, Edge, and Safari.
+
+### Titles, tags & search
+
+- When a **PDF** is uploaded (single, revision, or via bulk import), the server
+  parses the bottom-right **title block** with pdfjs and sends that text to
+  Azure OpenAI, which returns the exact **drawing title** and a few
+  **classification tags**. These are saved on the document.
+- Tags appear as chips on each document; click one to search it.
+- Use the **search bar** on any folder page to find drawings by name, title, or
+  tag. Results are scoped to that folder **and everything nested under it**, so
+  the same query means "within this category".
+- Missed or wrong? Open the document and hit **Retag** to re-run extraction on
+  the current revision.
+
+> Tagging needs a text-based PDF. Scanned/image-only PDFs have no text layer to
+> parse (they'd need OCR, which isn't included). Non-PDF files are stored but not
+> tagged.
+
+## How the AI tagging pipeline works
+
+```
+upload PDF ──► pdfjs extracts bottom-right title-block text (deterministic)
+           ──► Azure OpenAI (gpt-5.4-mini) → { title, tags }   [server-side only]
+           ──► saved to documents.drawing_title / documents.tags
+           ──► searchable, scoped to the current folder subtree
+```
+
+The Azure key lives only in server env vars and is used exclusively by the
+`/api/extract-tag` route — it never reaches the browser.
 
 ---
 

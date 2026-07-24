@@ -9,6 +9,8 @@ export interface Document {
   id: string;
   folder_id: string;
   name: string;
+  drawing_title: string | null;
+  tags: string[];
   created_at: string;
 }
 
@@ -29,6 +31,11 @@ export interface DocumentWithRevisions extends Document {
   revisions: Revision[];
   /** Highest-numbered (current/main) revision, or null if none uploaded yet. */
   latest: Revision | null;
+}
+
+export interface DrawingMeta {
+  title: string | null;
+  tags: string[];
 }
 
 export interface FolderContents {

@@ -157,7 +157,9 @@ export function ImportDialog({
             <span>{pct}%</span>
           </div>
           <p className="truncate text-xs text-slate-400">
-            {progress.current || "Preparing…"}
+            {progress.total > 0 && progress.done === progress.total
+              ? "Analyzing drawings & assigning tags…"
+              : progress.current || "Preparing…"}
           </p>
           <p className="text-xs text-slate-400">
             Please keep this tab open until the import finishes.

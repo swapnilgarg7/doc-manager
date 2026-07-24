@@ -4,6 +4,7 @@ import {
   createDocument,
   uploadRevision,
 } from "@/lib/api";
+import { tagDocument } from "@/lib/tags";
 
 // Uses the standard File & Directory Entries API (FileSystemEntry and friends
 // are provided by the DOM lib) exposed via DataTransferItem.webkitGetAsEntry().
@@ -154,6 +155,9 @@ export async function importIntoFolder(
     addedRevisions: 0,
     failures: [],
   };
+  // AI tagging runs in the background so it doesn't slow the uploads; we await
+  // all of them once the files are in.
+  const tagging: Promise<unknown>[] = [];
 
   async function walk(folderId: string, n: ImportNode, path: string) {
     for (const file of n.files) {
@@ -162,13 +166,18 @@ export async function importIntoFolder(
       try {
         const docName = stripExtension(file.name);
         const existing = await findDocument(folderId, docName);
+        let documentId: string;
         if (existing) {
-          await uploadRevision(existing.id, file, "Imported revision");
+          const rev = await uploadRevision(existing.id, file, "Imported revision");
+          documentId = existing.id;
           result.addedRevisions += 1;
+          tagging.push(tagDocument(documentId, rev.file_path, file.name));
         } else {
           const doc = await createDocument(folderId, docName);
-          await uploadRevision(doc.id, file, "Imported");
+          const rev = await uploadRevision(doc.id, file, "Imported");
+          documentId = doc.id;
           result.createdDocuments += 1;
+          tagging.push(tagDocument(documentId, rev.file_path, file.name));
         }
         result.uploaded += 1;
         onProgress({ done: result.uploaded, total, current: filePath });
@@ -186,5 +195,6 @@ export async function importIntoFolder(
   }
 
   await walk(targetFolderId, node, "");
+  await Promise.allSettled(tagging);
   return result;
 }

@@ -359,6 +359,57 @@ async function collectFolderIds(rootId: string): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Search (scoped to a folder and everything nested under it)
+// ---------------------------------------------------------------------------
+
+export interface SearchResult {
+  document: DocumentWithRevisions;
+  folderId: string;
+  folderName: string;
+}
+
+/**
+ * All documents in `folderId` and every folder nested beneath it, each with its
+ * revisions and containing-folder name. The caller filters by query text.
+ */
+export async function getSubtreeDocuments(
+  folderId: string
+): Promise<SearchResult[]> {
+  const folderIds = await collectFolderIds(folderId);
+
+  const docs = throwIf(
+    await supabase
+      .from("documents")
+      .select("*")
+      .in("folder_id", folderIds)
+      .order("name", { ascending: true })
+  ) as Document[];
+
+  const withRevs = await attachRevisions(docs);
+
+  const folders = throwIf(
+    await supabase.from("folders").select("id, name").in("id", folderIds)
+  ) as { id: string; name: string }[];
+  const nameById = new Map(folders.map((f) => [f.id, f.name]));
+
+  return withRevs.map((d) => ({
+    document: d,
+    folderId: d.folder_id,
+    folderName: nameById.get(d.folder_id) ?? "",
+  }));
+}
+
+/** True if the document's name, parsed title, or any tag contains `q`. */
+export function matchesQuery(result: SearchResult, q: string): boolean {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  const { document } = result;
+  if (document.name.toLowerCase().includes(needle)) return true;
+  if (document.drawing_title?.toLowerCase().includes(needle)) return true;
+  return document.tags.some((t) => t.toLowerCase().includes(needle));
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard stats
 // ---------------------------------------------------------------------------
 

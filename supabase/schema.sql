@@ -21,12 +21,15 @@ create index if not exists folders_parent_id_idx on public.folders(parent_id);
 
 -- A document is a single logical drawing/spec that can have many revisions.
 create table if not exists public.documents (
-  id         uuid primary key default gen_random_uuid(),
-  folder_id  uuid not null references public.folders(id) on delete cascade,
-  name       text not null,
-  created_at timestamptz not null default now()
+  id            uuid primary key default gen_random_uuid(),
+  folder_id     uuid not null references public.folders(id) on delete cascade,
+  name          text not null,
+  drawing_title text,                       -- exact title parsed from the PDF title block
+  tags          text[] not null default '{}', -- AI-assigned classification tags for search
+  created_at    timestamptz not null default now()
 );
 create index if not exists documents_folder_id_idx on public.documents(folder_id);
+create index if not exists documents_tags_idx on public.documents using gin (tags);
 
 -- Each upload of a document is a revision. Highest revision_number = current/main.
 create table if not exists public.revisions (

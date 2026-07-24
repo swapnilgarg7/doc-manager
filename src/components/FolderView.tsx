@@ -12,6 +12,9 @@ import {
   deleteDocument,
   uploadRevision,
   getFileUrl,
+  getSubtreeDocuments,
+  matchesQuery,
+  type SearchResult,
 } from "@/lib/api";
 import type {
   Folder,
@@ -30,6 +33,9 @@ import {
   buildImportTree,
   type ImportNode,
 } from "@/lib/import";
+import { tagDocument } from "@/lib/tags";
+import { TagBadges } from "./TagBadges";
+import { SearchIcon, CloseIcon } from "./icons";
 import {
   FolderIcon,
   FileIcon,
@@ -68,11 +74,30 @@ export function FolderView({ folderId }: { folderId: string }) {
   const [reading, setReading] = useState(false);
   const dragDepth = useRef(0);
 
+  // Search (scoped to this folder + everything nested under it)
+  const [query, setQuery] = useState("");
+  const [subtree, setSubtree] = useState<SearchResult[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  async function onSearchChange(value: string) {
+    setQuery(value);
+    // Lazily fetch the subtree the first time the user searches.
+    if (value.trim() && subtree === null && !searching) {
+      setSearching(true);
+      try {
+        setSubtree(await getSubtreeDocuments(folderId));
+      } finally {
+        setSearching(false);
+      }
+    }
+  }
+
   const load = useCallback(async () => {
     try {
       const contents = await getFolderContents(folderId);
       setError(null);
       setData(contents);
+      setSubtree(null); // invalidate search cache; refetched on next search
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load folder.");
     } finally {
@@ -203,12 +228,46 @@ export function FolderView({ folderId }: { folderId: string }) {
         its whole structure at once.
       </p>
 
-      {/* Subfolders / categories */}
-      {subfolders.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Categories
-          </h2>
+      {/* Search — matches document names, parsed titles, and AI tags */}
+      <div className="relative">
+        <SearchIcon
+          width={17}
+          height={17}
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+        />
+        <input
+          className="input pl-9 pr-9"
+          placeholder={`Search drawings & tags in “${folder?.name}” (incl. subfolders)…`}
+          value={query}
+          onChange={(e) => onSearchChange(e.target.value)}
+        />
+        {query && (
+          <button
+            onClick={() => setQuery("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            title="Clear search"
+          >
+            <CloseIcon width={15} height={15} />
+          </button>
+        )}
+      </div>
+
+      {query.trim() ? (
+        <SearchResults
+          rows={subtree}
+          query={query}
+          loading={searching}
+          onPreview={(rev, name) => setPreview({ rev, name })}
+          onTagClick={(t) => onSearchChange(t)}
+        />
+      ) : (
+        <>
+          {/* Subfolders / categories */}
+          {subfolders.length > 0 && (
+            <section className="space-y-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Categories
+              </h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {subfolders.map((f) => (
               <div
@@ -285,11 +344,14 @@ export function FolderView({ folderId }: { folderId: string }) {
                 onUpload={() => setUploadTo(doc)}
                 onRename={() => setRenameDoc(doc)}
                 onDelete={() => setDeleteDoc(doc)}
+                onTagClick={(t) => onSearchChange(t)}
               />
             ))}
           </div>
         )}
       </section>
+        </>
+      )}
 
       {/* Dialogs */}
       <NameDialog
@@ -338,7 +400,14 @@ export function FolderView({ folderId }: { folderId: string }) {
         submitLabel="Create & upload"
         onClose={() => setNewDoc(false)}
         onSubmit={async ({ file, notes, name }) => {
-          await createDocumentWithFirstRevision(folderId, name, file, notes);
+          const doc = await createDocumentWithFirstRevision(
+            folderId,
+            name,
+            file,
+            notes
+          );
+          if (doc.latest)
+            await tagDocument(doc.id, doc.latest.file_path, file.name);
           await load();
         }}
       />
@@ -348,7 +417,10 @@ export function FolderView({ folderId }: { folderId: string }) {
         submitLabel="Upload revision"
         onClose={() => setUploadTo(null)}
         onSubmit={async ({ file, notes }) => {
-          if (uploadTo) await uploadRevision(uploadTo.id, file, notes);
+          if (uploadTo) {
+            const rev = await uploadRevision(uploadTo.id, file, notes);
+            await tagDocument(uploadTo.id, rev.file_path, file.name);
+          }
           await load();
         }}
       />
@@ -402,12 +474,14 @@ function DocumentRow({
   onUpload,
   onRename,
   onDelete,
+  onTagClick,
 }: {
   doc: DocumentWithRevisions;
   onPreview: (rev: Revision) => void;
   onUpload: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onTagClick: (tag: string) => void;
 }) {
   const latest = doc.latest;
   const olderCount = Math.max(0, doc.revisions.length - 1);
@@ -445,6 +519,11 @@ function DocumentRow({
               )} · ${formatDateShort(latest.created_at)}`
             : "No revisions uploaded yet"}
         </p>
+        {doc.tags.length > 0 && (
+          <div className="mt-1.5">
+            <TagBadges tags={doc.tags} onClick={onTagClick} />
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-1">
@@ -494,5 +573,114 @@ function DocumentRow({
         </div>
       </div>
     </div>
+  );
+}
+
+function SearchResults({
+  rows,
+  query,
+  loading,
+  onPreview,
+  onTagClick,
+}: {
+  rows: SearchResult[] | null;
+  query: string;
+  loading: boolean;
+  onPreview: (rev: Revision, name: string) => void;
+  onTagClick: (tag: string) => void;
+}) {
+  if (loading && rows === null) {
+    return (
+      <div className="card h-24 animate-pulse bg-slate-100" />
+    );
+  }
+
+  const results = (rows ?? []).filter((r) => matchesQuery(r, query));
+
+  if (results.length === 0) {
+    return (
+      <div className="card flex flex-col items-center justify-center gap-2 py-12 text-center">
+        <SearchIcon width={22} height={22} className="text-slate-300" />
+        <p className="font-medium text-slate-700">No matches for “{query}”</p>
+        <p className="text-sm text-slate-400">
+          Try a discipline like “Plumbing”, or part of a drawing title.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        {results.length} result{results.length === 1 ? "" : "s"} for “{query}”
+      </h2>
+      <div className="card divide-y divide-slate-100">
+        {results.map(({ document: doc, folderName }) => {
+          const latest = doc.latest;
+          return (
+            <div
+              key={doc.id}
+              className="flex flex-wrap items-center gap-3 px-4 py-3.5"
+            >
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+                <FileIcon width={20} height={20} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <Link
+                    href={`/documents/${doc.id}`}
+                    className="truncate font-medium text-slate-900 hover:text-brand-600 hover:underline"
+                  >
+                    {doc.name}
+                  </Link>
+                  {latest && (
+                    <span className="badge-green">
+                      Rev {latest.revision_number}
+                    </span>
+                  )}
+                  <span className="badge-slate">
+                    <FolderIcon width={12} height={12} />
+                    {folderName}
+                  </span>
+                </div>
+                {doc.drawing_title && doc.drawing_title !== doc.name && (
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    {doc.drawing_title}
+                  </p>
+                )}
+                {doc.tags.length > 0 && (
+                  <div className="mt-1.5">
+                    <TagBadges tags={doc.tags} onClick={onTagClick} />
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                {latest && (
+                  <>
+                    <button
+                      onClick={() => onPreview(latest, doc.name)}
+                      className="btn-ghost px-2"
+                      title="Preview current revision"
+                    >
+                      <EyeIcon width={17} height={17} />
+                    </button>
+                    <a
+                      href={getFileUrl(latest.file_path)}
+                      download={latest.file_name}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-ghost px-2"
+                      title="Download current revision"
+                    >
+                      <DownloadIcon width={17} height={17} />
+                    </a>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
