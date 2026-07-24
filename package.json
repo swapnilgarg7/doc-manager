@@ -9,7 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.2",
     "@supabase/supabase-js": "^2.110.8",
+    "mupdf": "^1.28.0",
     "next": "16.2.11",
     "openai": "^6.49.0",
     "pdfjs-dist": "^6.1.200",

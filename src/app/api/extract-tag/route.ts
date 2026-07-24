@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { supabase, DOCUMENTS_BUCKET } from "@/lib/supabase/client";
-import { extractTitleBlockText, classifyDrawing } from "@/lib/server/extract";
+import {
+  extractTitleBlockText,
+  renderTitleBlockImage,
+  classifyFromText,
+  classifyFromImage,
+} from "@/lib/server/extract";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -41,22 +46,37 @@ export async function POST(req: Request) {
     }
     const bytes = new Uint8Array(await dl.data.arrayBuffer());
 
-    // Deterministic extraction of the bottom-right title block.
-    let text = "";
+    // 1) Try deterministic text extraction from the bottom-right title block.
+    let region = "";
+    let full = "";
     try {
-      const { region, full } = await extractTitleBlockText(bytes);
-      text = region.length >= 8 ? region : full;
+      const extracted = await extractTitleBlockText(bytes);
+      region = extracted.region;
+      full = extracted.full;
     } catch (err) {
-      console.error("[extract-tag] PDF parse failed:", err);
+      console.error("[extract-tag] PDF text parse failed:", err);
     }
 
-    if (!text.trim()) {
-      // Likely a scanned/image-only PDF with no text layer.
-      return NextResponse.json({ title: null, tags: [], skipped: "no-text" });
+    let meta;
+    let source: "text" | "image";
+    if (full.trim().length >= 20) {
+      // Vector PDF with a real text layer.
+      const text = region.length >= 8 ? region : full;
+      meta = await classifyFromText(text, name);
+      source = "text";
+    } else {
+      // 2) Scanned / image-only PDF — rasterize + OCR via the vision model.
+      const image = await renderTitleBlockImage(bytes);
+      if (!image) {
+        return NextResponse.json({
+          title: null,
+          tags: [],
+          skipped: "no-text-no-render",
+        });
+      }
+      meta = await classifyFromImage(image, name);
+      source = "image";
     }
-
-    // AI classification.
-    const meta = await classifyDrawing(text, name);
 
     // Persist onto the document.
     const { error: updateError } = await supabase
@@ -67,7 +87,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
 
-    return NextResponse.json(meta);
+    return NextResponse.json({ ...meta, source });
   } catch (err) {
     console.error("[extract-tag] error:", err);
     return NextResponse.json(

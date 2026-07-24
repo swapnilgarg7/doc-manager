@@ -134,9 +134,13 @@ Explorer:
 ### Titles, tags & search
 
 - When a **PDF** is uploaded (single, revision, or via bulk import), the server
-  parses the bottom-right **title block** with pdfjs and sends that text to
-  Azure OpenAI, which returns the exact **drawing title** and a few
-  **classification tags**. These are saved on the document.
+  reads the bottom-right **title block** and sends it to Azure OpenAI, which
+  returns the exact **drawing title** and a few **classification tags**, saved
+  on the document. Two paths, chosen automatically:
+  - **Text PDFs** — pdfjs extracts the title-block text (fast, cheap).
+  - **Scanned / image-only PDFs** — mupdf renders the page, the bottom-right
+    corner is cropped, and the **vision model reads it (OCR)**. This is what
+    makes tagging work even when the title is baked into the image.
 - Tags appear as chips on each document; click one to search it.
 - Use the **search bar** on any folder page to find drawings by name, title, or
   tag. Results are scoped to that folder **and everything nested under it**, so
@@ -144,16 +148,16 @@ Explorer:
 - Missed or wrong? Open the document and hit **Retag** to re-run extraction on
   the current revision.
 
-> Tagging needs a text-based PDF. Scanned/image-only PDFs have no text layer to
-> parse (they'd need OCR, which isn't included). Non-PDF files are stored but not
-> tagged.
+> Non-PDF files are stored but not tagged.
 
 ## How the AI tagging pipeline works
 
 ```
-upload PDF ──► pdfjs extracts bottom-right title-block text (deterministic)
-           ──► Azure OpenAI (gpt-5.4-mini) → { title, tags }   [server-side only]
-           ──► saved to documents.drawing_title / documents.tags
+upload PDF
+  ├─ has text layer?  ──► pdfjs extracts bottom-right title-block text
+  └─ scanned/image?   ──► mupdf renders page 1 → crop bottom-right → image
+           ──► Azure OpenAI (gpt-5.4-mini, text or vision) → { title, tags }
+           ──► saved to documents.drawing_title / documents.tags   [server-side]
            ──► searchable, scoped to the current folder subtree
 ```
 

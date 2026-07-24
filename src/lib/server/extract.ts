@@ -1,5 +1,6 @@
 import "server-only";
 import { AzureOpenAI } from "openai";
+import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 import type { DrawingMeta } from "@/lib/types";
 
 export type { DrawingMeta };
@@ -19,7 +20,9 @@ export async function extractTitleBlockText(
 ): Promise<{ region: string; full: string }> {
   // Dynamic import so pdfjs only loads in the Node runtime, not the bundle.
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const loadingTask = pdfjs.getDocument({ data });
+  // pdfjs transfers (detaches) the buffer it's given, so hand it a private copy
+  // — otherwise the caller's bytes become unusable for later rendering.
+  const loadingTask = pdfjs.getDocument({ data: data.slice() });
   const doc = await loadingTask.promise;
 
   try {
@@ -59,11 +62,58 @@ export async function extractTitleBlockText(
 }
 
 // ---------------------------------------------------------------------------
+// Rasterization fallback — for scanned / image-only PDFs that have no text
+// layer, render page 1 and crop the bottom-right title block to an image the
+// vision model can read (OCR-via-LLM).
+// ---------------------------------------------------------------------------
+
+export async function renderTitleBlockImage(
+  data: Uint8Array
+): Promise<string | null> {
+  try {
+    // mupdf renders reliably in Node (pure WASM, no worker/canvas transfer),
+    // unlike pdfjs's rendering path which breaks once the bundler wraps it.
+    const mupdf = await import("mupdf");
+    const { createCanvas, loadImage } = await import("@napi-rs/canvas");
+
+    // Use a private copy in case an earlier consumer detached the buffer.
+    const doc = mupdf.Document.openDocument(data.slice(), "application/pdf");
+    if (doc.countPages() < 1) return null;
+    const page = doc.loadPage(0);
+    const [x0, y0, x1, y1] = page.getBounds();
+    const w = x1 - x0;
+    const h = y1 - y0;
+    // Render large enough that small title-block text stays legible.
+    const scale = Math.min(3, 2600 / Math.max(w, h));
+    const pixmap = page.toPixmap(
+      mupdf.Matrix.scale(scale, scale),
+      mupdf.ColorSpace.DeviceRGB,
+      false,
+      true
+    );
+    const fullPng = Buffer.from(pixmap.asPNG());
+
+    // Crop the bottom-right quadrant (standard title-block location).
+    const img = await loadImage(fullPng);
+    const sx = Math.floor(img.width * 0.5);
+    const sy = Math.floor(img.height * 0.55);
+    const sw = img.width - sx;
+    const sh = img.height - sy;
+    const crop = createCanvas(sw, sh);
+    crop.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+    return crop.toBuffer("image/png").toString("base64");
+  } catch (err) {
+    console.error("[extract] title-block render failed:", err);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // AI classification — turns noisy title-block text into a clean title + tags.
 // ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `You extract metadata from a construction / engineering drawing.
-You are given raw text scraped from the bottom-right title-block area of a drawing PDF (it may be noisy, duplicated, or out of order) plus the file name.
+You are given either raw text scraped from the bottom-right title-block area of a drawing PDF (which may be noisy, duplicated, or out of order) OR an image of that title-block corner, plus the file name.
 
 Return ONLY a JSON object of the form:
 {"title": string, "tags": string[]}
@@ -100,10 +150,9 @@ function sanitizeTags(raw: unknown): string[] {
   return out;
 }
 
-export async function classifyDrawing(
-  titleBlockText: string,
-  fileName: string
-): Promise<DrawingMeta> {
+type UserContent = string | ChatCompletionContentPart[];
+
+async function runClassification(userContent: UserContent): Promise<DrawingMeta> {
   const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
   const apiKey = process.env.AZURE_OPENAI_API_KEY;
   const apiVersion = process.env.AZURE_OPENAI_API_VERSION;
@@ -120,10 +169,7 @@ export async function classifyDrawing(
     max_completion_tokens: 4096,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `File name: ${fileName}\n\nTitle-block text:\n"""\n${titleBlockText}\n"""`,
-      },
+      { role: "user", content: userContent },
     ],
   });
 
@@ -138,4 +184,31 @@ export async function classifyDrawing(
       : null;
 
   return { title, tags: sanitizeTags(parsed?.tags) };
+}
+
+/** Classify from extracted title-block text (vector PDFs with a text layer). */
+export async function classifyFromText(
+  titleBlockText: string,
+  fileName: string
+): Promise<DrawingMeta> {
+  return runClassification(
+    `File name: ${fileName}\n\nTitle-block text:\n"""\n${titleBlockText}\n"""`
+  );
+}
+
+/** Classify from a rendered title-block image (scanned / image-only PDFs). */
+export async function classifyFromImage(
+  imageBase64: string,
+  fileName: string
+): Promise<DrawingMeta> {
+  return runClassification([
+    {
+      type: "text",
+      text: `File name: ${fileName}. The image below is the bottom-right corner of a scanned drawing sheet. Read the drawing's title from its title block.`,
+    },
+    {
+      type: "image_url",
+      image_url: { url: `data:image/png;base64,${imageBase64}` },
+    },
+  ]);
 }
