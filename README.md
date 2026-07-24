@@ -13,6 +13,10 @@ an **archive** you can still preview or download.
 ## Features
 
 - 📂 **Unlimited folder nesting** — sections → categories → sub-categories → …
+- 🗂️ **Drag-and-drop folder import** — drop an entire folder from your computer
+  onto a section (or into any folder) and the whole subfolder tree + files are
+  recreated automatically. Re-dropping an updated folder adds new **revisions**
+  to matching documents instead of duplicating them.
 - 📄 **Documents with revision control** — newest upload is always "main", older
   revisions are archived automatically (never deleted unless you say so)
 - 👁️ **In-browser preview** for PDFs and images, plus one-click download
@@ -90,6 +94,24 @@ Open [http://localhost:3000](http://localhost:3000).
    **Upload new revision**. The new file becomes the current revision; the
    previous one moves to **Archived revisions**.
 5. Click 👁 to preview inline, or ⬇ to download.
+
+### Bulk import (drag & drop a folder)
+
+Instead of creating everything by hand, drag a folder straight from Finder /
+Explorer:
+
+- **Onto a section card** on the home page, or **anywhere on an open folder
+  page**.
+- A preview shows exactly what will be created (how many categories and files).
+  A single dropped folder can either be merged into the target or recreated as a
+  subfolder — your choice.
+- Every file becomes a document (revision 1). If a document with the same name
+  already exists in that location, the file is added as its **next revision** —
+  so dropping an updated copy of your folder later just versions the changed
+  drawings automatically.
+
+> Folder drag-and-drop uses the browser's File & Directory Entries API, which
+> works in Chrome, Edge, and Safari.
 
 ---
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   getFolderContents,
@@ -24,6 +24,12 @@ import { NameDialog } from "./NameDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { UploadDialog } from "./UploadDialog";
 import { FilePreview } from "./FilePreview";
+import { ImportDialog } from "./ImportDialog";
+import {
+  getDroppedEntries,
+  buildImportTree,
+  type ImportNode,
+} from "@/lib/import";
 import {
   FolderIcon,
   FileIcon,
@@ -56,10 +62,17 @@ export function FolderView({ folderId }: { folderId: string }) {
     name: string;
   } | null>(null);
 
+  // Folder drag-and-drop import
+  const [dragging, setDragging] = useState(false);
+  const [importRoot, setImportRoot] = useState<ImportNode | null>(null);
+  const [reading, setReading] = useState(false);
+  const dragDepth = useRef(0);
+
   const load = useCallback(async () => {
     try {
+      const contents = await getFolderContents(folderId);
       setError(null);
-      setData(await getFolderContents(folderId));
+      setData(contents);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load folder.");
     } finally {
@@ -68,7 +81,8 @@ export function FolderView({ folderId }: { folderId: string }) {
   }, [folderId]);
 
   useEffect(() => {
-    setLoading(true);
+    // load() only setStates after awaiting its fetch; safe, intentional suppression.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
@@ -99,8 +113,68 @@ export function FolderView({ folderId }: { folderId: string }) {
 
   const { folder, breadcrumbs, subfolders, documents } = data;
 
+  const hasFiles = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer.types).includes("Files");
+
+  function onDragEnter(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  }
+  function onDragOver(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+  function onDragLeave(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  }
+  async function onDrop(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    // Read entries synchronously — the DataTransfer is only valid during the event.
+    const entries = getDroppedEntries(e.dataTransfer);
+    if (entries.length === 0) return;
+    setReading(true);
+    try {
+      const root = await buildImportTree(entries);
+      setImportRoot(root);
+    } finally {
+      setReading(false);
+    }
+  }
+
   return (
-    <div className="space-y-6">
+    <div
+      className="relative space-y-6"
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {(dragging || reading) && (
+        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-brand-500 bg-brand-50/80 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <UploadIcon width={32} height={32} className="text-brand-600" />
+            <p className="text-sm font-semibold text-brand-700">
+              {reading
+                ? "Reading folder…"
+                : `Drop to import into “${folder?.name}”`}
+            </p>
+            <p className="text-xs text-brand-600">
+              Subfolders and files are recreated automatically
+            </p>
+          </div>
+        </div>
+      )}
       <Breadcrumbs trail={breadcrumbs} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -123,6 +197,11 @@ export function FolderView({ folderId }: { folderId: string }) {
           </button>
         </div>
       </div>
+
+      <p className="-mt-2 text-xs text-slate-400">
+        Tip: drag a folder from your computer anywhere onto this page to import
+        its whole structure at once.
+      </p>
 
       {/* Subfolders / categories */}
       {subfolders.length > 0 && (
@@ -304,6 +383,14 @@ export function FolderView({ folderId }: { folderId: string }) {
         revision={preview?.rev ?? null}
         documentName={preview?.name ?? ""}
         onClose={() => setPreview(null)}
+      />
+
+      <ImportDialog
+        root={importRoot}
+        targetName={folder?.name ?? ""}
+        targetFolderId={folderId}
+        onClose={() => setImportRoot(null)}
+        onDone={load}
       />
     </div>
   );

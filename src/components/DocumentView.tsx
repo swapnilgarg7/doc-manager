@@ -39,10 +39,11 @@ export function DocumentView({ documentId }: { documentId: string }) {
 
   const load = useCallback(async () => {
     try {
-      setError(null);
       const d = await getDocumentWithRevisions(documentId);
+      const crumbs = await getBreadcrumbs(d.folder_id);
+      setError(null);
       setDoc(d);
-      setTrail(await getBreadcrumbs(d.folder_id));
+      setTrail(crumbs);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load document.");
     } finally {
@@ -51,7 +52,8 @@ export function DocumentView({ documentId }: { documentId: string }) {
   }, [documentId]);
 
   useEffect(() => {
-    setLoading(true);
+    // load() only setStates after awaiting its fetch; safe, intentional suppression.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 

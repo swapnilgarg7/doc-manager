@@ -14,6 +14,12 @@ import type { Folder } from "@/lib/types";
 import { ConfigNotice } from "@/components/ConfigNotice";
 import { NameDialog } from "@/components/NameDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ImportDialog } from "@/components/ImportDialog";
+import {
+  getDroppedEntries,
+  buildImportTree,
+  type ImportNode,
+} from "@/lib/import";
 import {
   FolderIcon,
   PlusIcon,
@@ -32,11 +38,15 @@ export default function HomePage() {
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<Folder | null>(null);
   const [deleting, setDeleting] = useState<Folder | null>(null);
+  const [importInto, setImportInto] = useState<{
+    folder: Folder;
+    root: ImportNode;
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setError(null);
       const [folders, s] = await Promise.all([getRootFolders(), getStats()]);
+      setError(null);
       setSections(folders);
       setStats(s);
     } catch (err) {
@@ -47,6 +57,9 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
+    // load() only setStates after awaiting its fetch; the lint rule can't see
+    // across the useCallback boundary, so this is a safe, intentional suppression.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
@@ -97,6 +110,7 @@ export default function HomePage() {
                 folder={s}
                 onRename={() => setRenaming(s)}
                 onDelete={() => setDeleting(s)}
+                onImport={(root) => setImportInto({ folder: s, root })}
               />
             ))}
           </div>
@@ -126,6 +140,14 @@ export default function HomePage() {
           if (renaming) await renameFolder(renaming.id, name);
           await load();
         }}
+      />
+
+      <ImportDialog
+        root={importInto?.root ?? null}
+        targetName={importInto?.folder.name ?? ""}
+        targetFolderId={importInto?.folder.id ?? ""}
+        onClose={() => setImportInto(null)}
+        onDone={load}
       />
 
       <ConfirmDialog
@@ -174,13 +196,53 @@ function SectionCard({
   folder,
   onRename,
   onDelete,
+  onImport,
 }: {
   folder: Folder;
   onRename: () => void;
   onDelete: () => void;
+  onImport: (root: ImportNode) => void;
 }) {
+  const [over, setOver] = useState(false);
+  const hasFiles = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer.types).includes("Files");
+
+  async function onDrop(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    setOver(false);
+    const entries = getDroppedEntries(e.dataTransfer);
+    if (entries.length === 0) return;
+    const root = await buildImportTree(entries);
+    onImport(root);
+  }
+
+  function onDragEnter(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    setOver(true);
+  }
+  function onDragOver(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+
   return (
-    <div className="card group relative flex flex-col p-5 transition-shadow hover:shadow-md">
+    <div
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={() => setOver(false)}
+      onDrop={onDrop}
+      className={`card group relative flex flex-col p-5 transition-shadow hover:shadow-md ${
+        over ? "ring-2 ring-brand-500 ring-offset-2" : ""
+      }`}
+    >
+      {over && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-brand-50/90 text-sm font-semibold text-brand-700">
+          Drop to import here
+        </div>
+      )}
       <Link href={`/folders/${folder.id}`} className="flex items-start gap-3">
         <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
           <FolderIcon width={22} height={22} />

@@ -6,5 +6,5 @@ export default async function DocumentPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <DocumentView documentId={id} />;
+  return <DocumentView key={id} documentId={id} />;
 }

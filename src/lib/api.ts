@@ -73,6 +73,31 @@ export async function deleteFolder(id: string): Promise<void> {
   if (error) throw error;
 }
 
+/** Find a direct child folder by (case-insensitive) name, or null. */
+export async function findFolder(
+  parentId: string | null,
+  name: string
+): Promise<Folder | null> {
+  const base = supabase
+    .from("folders")
+    .select("*")
+    .ilike("name", name.trim())
+    .limit(1);
+  const { data, error } = await (parentId
+    ? base.eq("parent_id", parentId)
+    : base.is("parent_id", null));
+  if (error) throw error;
+  return data?.[0] ?? null;
+}
+
+/** Return an existing child folder with this name, or create it. */
+export async function findOrCreateFolder(
+  parentId: string | null,
+  name: string
+): Promise<Folder> {
+  return (await findFolder(parentId, name)) ?? (await createFolder(name, parentId));
+}
+
 // ---------------------------------------------------------------------------
 // Folder contents (subfolders + documents with their revisions)
 // ---------------------------------------------------------------------------
@@ -163,6 +188,21 @@ export async function createDocument(
       .select("*")
       .single()
   );
+}
+
+/** Find a document in a folder by (case-insensitive) name, or null. */
+export async function findDocument(
+  folderId: string,
+  name: string
+): Promise<Document | null> {
+  const { data, error } = await supabase
+    .from("documents")
+    .select("*")
+    .eq("folder_id", folderId)
+    .ilike("name", name.trim())
+    .limit(1);
+  if (error) throw error;
+  return data?.[0] ?? null;
 }
 
 export async function renameDocument(id: string, name: string): Promise<void> {
