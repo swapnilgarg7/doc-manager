@@ -205,10 +205,10 @@ export async function findDocument(
   return data?.[0] ?? null;
 }
 
-export async function renameDocument(id: string, name: string): Promise<void> {
+export async function renameDocument(id: string, title: string): Promise<void> {
   const { error } = await supabase
     .from("documents")
-    .update({ name: name.trim() })
+    .update({ drawing_title: title.trim() })
     .eq("id", id);
   if (error) throw error;
 }

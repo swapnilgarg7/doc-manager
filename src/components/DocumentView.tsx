@@ -17,7 +17,6 @@ import { tagDocument } from "@/lib/tags";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { UploadDialog } from "./UploadDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { FilePreview } from "./FilePreview";
 import { TagBadges } from "./TagBadges";
 import {
   FileIcon,
@@ -36,7 +35,6 @@ export function DocumentView({ documentId }: { documentId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [preview, setPreview] = useState<Revision | null>(null);
   const [deleteRev, setDeleteRev] = useState<Revision | null>(null);
   const [retagging, setRetagging] = useState(false);
 
@@ -171,16 +169,8 @@ export function DocumentView({ documentId }: { documentId: string }) {
                 </div>
               </div>
               <div className="flex gap-2">
-                <button
-                  className="btn-secondary"
-                  onClick={() => setPreview(latest)}
-                >
-                  <EyeIcon width={16} height={16} />
-                  Preview
-                </button>
                 <a
                   href={getFileUrl(latest.file_path)}
-                  download={latest.file_name}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="btn-primary"
@@ -230,22 +220,14 @@ export function DocumentView({ documentId }: { documentId: string }) {
                   </p>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setPreview(rev)}
-                    className="btn-ghost px-2"
-                    title="Preview"
-                  >
-                    <EyeIcon width={16} height={16} />
-                  </button>
                   <a
                     href={getFileUrl(rev.file_path)}
-                    download={rev.file_name}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="btn-ghost px-2"
-                    title="Download"
+                    title="View"
                   >
-                    <DownloadIcon width={16} height={16} />
+                    <EyeIcon width={16} height={16} />
                   </a>
                   <button
                     onClick={() => setDeleteRev(rev)}
@@ -287,12 +269,6 @@ export function DocumentView({ documentId }: { documentId: string }) {
           if (deleteRev) await deleteRevision(deleteRev);
           await load();
         }}
-      />
-
-      <FilePreview
-        revision={preview}
-        documentName={displayName}
-        onClose={() => setPreview(null)}
       />
     </div>
   );

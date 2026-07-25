@@ -35,10 +35,10 @@ export default function RootLayout({
                 </svg>
               </span>
               <span className="text-[15px] font-semibold tracking-tight text-slate-900">
-                DocManager
+                Doc Manager
               </span>
               <span className="hidden text-xs text-slate-400 sm:inline">
-                · Construction ERP
+                · Construction Documents
               </span>
             </Link>
           </div>

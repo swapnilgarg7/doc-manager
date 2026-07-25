@@ -27,6 +27,7 @@ export function ConfirmDialog({
     try {
       await onConfirm();
       onClose();
+      setBusy(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
       setBusy(false);

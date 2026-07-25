@@ -20,13 +20,11 @@ import type {
   Folder,
   FolderContents,
   DocumentWithRevisions,
-  Revision,
 } from "@/lib/types";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { NameDialog } from "./NameDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { UploadDialog } from "./UploadDialog";
-import { FilePreview } from "./FilePreview";
 import { ImportDialog } from "./ImportDialog";
 import {
   getDroppedEntries,
@@ -46,7 +44,6 @@ import {
   TrashIcon,
   ChevronRight,
   EyeIcon,
-  DownloadIcon,
   ClockIcon,
   TagIcon,
 } from "./icons";
@@ -65,10 +62,6 @@ export function FolderView({ folderId }: { folderId: string }) {
   const [renameDoc, setRenameDoc] = useState<DocumentWithRevisions | null>(null);
   const [deleteDoc, setDeleteDoc] = useState<DocumentWithRevisions | null>(null);
   const [uploadTo, setUploadTo] = useState<DocumentWithRevisions | null>(null);
-  const [preview, setPreview] = useState<{
-    rev: Revision;
-    name: string;
-  } | null>(null);
 
   // Folder drag-and-drop import
   const [dragging, setDragging] = useState(false);
@@ -306,7 +299,6 @@ export function FolderView({ folderId }: { folderId: string }) {
           rows={subtree}
           query={query}
           loading={searching}
-          onPreview={(rev, name) => setPreview({ rev, name })}
           onTagClick={(t) => onSearchChange(t)}
         />
       ) : (
@@ -389,7 +381,6 @@ export function FolderView({ folderId }: { folderId: string }) {
               <DocumentRow
                 key={doc.id}
                 doc={doc}
-                onPreview={(rev) => setPreview({ rev, name: documentDisplayName(doc) })}
                 onUpload={() => setUploadTo(doc)}
                 onRename={() => setRenameDoc(doc)}
                 onDelete={() => setDeleteDoc(doc)}
@@ -476,8 +467,8 @@ export function FolderView({ folderId }: { folderId: string }) {
       <NameDialog
         open={!!renameDoc}
         title="Rename document"
-        label="Document name"
-        initialValue={renameDoc?.name ?? ""}
+        label="Document title"
+        initialValue={renameDoc ? documentDisplayName(renameDoc) : ""}
         onClose={() => setRenameDoc(null)}
         onSubmit={async (name) => {
           if (renameDoc) await renameDocument(renameDoc.id, name);
@@ -500,12 +491,6 @@ export function FolderView({ folderId }: { folderId: string }) {
         }}
       />
 
-      <FilePreview
-        revision={preview?.rev ?? null}
-        documentName={preview?.name ?? ""}
-        onClose={() => setPreview(null)}
-      />
-
       <ImportDialog
         root={importRoot}
         targetName={folder?.name ?? ""}
@@ -519,14 +504,12 @@ export function FolderView({ folderId }: { folderId: string }) {
 
 function DocumentRow({
   doc,
-  onPreview,
   onUpload,
   onRename,
   onDelete,
   onTagClick,
 }: {
   doc: DocumentWithRevisions;
-  onPreview: (rev: Revision) => void;
   onUpload: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -577,25 +560,15 @@ function DocumentRow({
 
       <div className="flex items-center gap-1">
         {latest && (
-          <>
-            <button
-              onClick={() => onPreview(latest)}
-              className="btn-ghost px-2"
-              title="Preview current revision"
-            >
-              <EyeIcon width={17} height={17} />
-            </button>
-            <a
-              href={getFileUrl(latest.file_path)}
-              download={latest.file_name}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-ghost px-2"
-              title="Download current revision"
-            >
-              <DownloadIcon width={17} height={17} />
-            </a>
-          </>
+          <a
+            href={getFileUrl(latest.file_path)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-ghost px-2"
+            title="View current revision"
+          >
+            <EyeIcon width={17} height={17} />
+          </a>
         )}
         <button
           onClick={onUpload}
@@ -629,13 +602,11 @@ function SearchResults({
   rows,
   query,
   loading,
-  onPreview,
   onTagClick,
 }: {
   rows: SearchResult[] | null;
   query: string;
   loading: boolean;
-  onPreview: (rev: Revision, name: string) => void;
   onTagClick: (tag: string) => void;
 }) {
   if (loading && rows === null) {
@@ -705,25 +676,15 @@ function SearchResults({
               </div>
               <div className="flex items-center gap-1">
                 {latest && (
-                  <>
-                    <button
-                      onClick={() => onPreview(latest, documentDisplayName(doc))}
-                      className="btn-ghost px-2"
-                      title="Preview current revision"
-                    >
-                      <EyeIcon width={17} height={17} />
-                    </button>
-                    <a
-                      href={getFileUrl(latest.file_path)}
-                      download={latest.file_name}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-ghost px-2"
-                      title="Download current revision"
-                    >
-                      <DownloadIcon width={17} height={17} />
-                    </a>
-                  </>
+                  <a
+                    href={getFileUrl(latest.file_path)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-ghost px-2"
+                    title="View current revision"
+                  >
+                    <EyeIcon width={17} height={17} />
+                  </a>
                 )}
               </div>
             </div>
