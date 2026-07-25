@@ -1,80 +1,47 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  getFolderContents,
-  createFolder,
-  renameFolder,
-  deleteFolder,
-  createDocumentWithFirstRevision,
-  renameDocument,
-  deleteDocument,
-  uploadRevision,
-  getFileUrl,
-  getSubtreeDocuments,
-  matchesQuery,
-  type SearchResult,
-} from "@/lib/api";
-import type {
-  Folder,
-  FolderContents,
-  DocumentWithRevisions,
-} from "@/lib/types";
-import { Breadcrumbs } from "./Breadcrumbs";
-import { NameDialog } from "./NameDialog";
-import { ConfirmDialog } from "./ConfirmDialog";
-import { UploadDialog } from "./UploadDialog";
-import { ImportDialog } from "./ImportDialog";
-import {
-  getDroppedEntries,
-  buildImportTree,
-  type ImportNode,
-} from "@/lib/import";
+import { scan, getSubtree, fileUrl, matchesQuery } from "@/lib/api";
+import type { DirListing, FileItem, SearchRow } from "@/lib/types";
 import { tagDocument } from "@/lib/tags";
 import { retagUntagged } from "@/lib/retag";
+import { Breadcrumbs } from "./Breadcrumbs";
 import { TagBadges } from "./TagBadges";
-import { SearchIcon, CloseIcon } from "./icons";
 import {
   FolderIcon,
   FileIcon,
-  PlusIcon,
-  UploadIcon,
-  PencilIcon,
-  TrashIcon,
-  ChevronRight,
   EyeIcon,
-  ClockIcon,
+  DownloadIcon,
+  ChevronRight,
   TagIcon,
+  SearchIcon,
+  CloseIcon,
 } from "./icons";
-import { formatBytes, formatDateShort, documentDisplayName } from "@/lib/format";
+import {
+  formatBytes,
+  formatDateFromMs,
+  documentDisplayName,
+  browseHref,
+} from "@/lib/format";
 
-export function FolderView({ folderId }: { folderId: string }) {
-  const [data, setData] = useState<FolderContents | null>(null);
+export function FolderView({
+  relPath,
+  atRoot = false,
+}: {
+  relPath: string;
+  atRoot?: boolean;
+}) {
+  const [data, setData] = useState<DirListing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Dialog state
-  const [newSub, setNewSub] = useState(false);
-  const [renameSub, setRenameSub] = useState<Folder | null>(null);
-  const [deleteSub, setDeleteSub] = useState<Folder | null>(null);
-  const [newDoc, setNewDoc] = useState(false);
-  const [renameDoc, setRenameDoc] = useState<DocumentWithRevisions | null>(null);
-  const [deleteDoc, setDeleteDoc] = useState<DocumentWithRevisions | null>(null);
-  const [uploadTo, setUploadTo] = useState<DocumentWithRevisions | null>(null);
-
-  // Folder drag-and-drop import
-  const [dragging, setDragging] = useState(false);
-  const [importRoot, setImportRoot] = useState<ImportNode | null>(null);
-  const [reading, setReading] = useState(false);
-  const dragDepth = useRef(0);
-
   // Search (scoped to this folder + everything nested under it)
   const [query, setQuery] = useState("");
-  const [subtree, setSubtree] = useState<SearchResult[] | null>(null);
+  const [subtree, setSubtree] = useState<SearchRow[] | null>(null);
   const [searching, setSearching] = useState(false);
 
-  // "Tag untagged" — backfill any docs in this subtree still missing tags.
+  // "Tag untagged" backfill
   const [retagging, setRetagging] = useState(false);
   const [retagProgress, setRetagProgress] = useState<{
     done: number;
@@ -82,17 +49,53 @@ export function FolderView({ folderId }: { folderId: string }) {
   } | null>(null);
   const [retagMsg, setRetagMsg] = useState<string | null>(null);
 
+  // Per-file tagging (single file)
+  const [taggingPath, setTaggingPath] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const listing = await scan(relPath);
+      setError(null);
+      setData(listing);
+      setSubtree(null); // invalidate search cache; refetched on next search
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load folder.");
+    } finally {
+      setLoading(false);
+    }
+  }, [relPath]);
+
+  useEffect(() => {
+    // load() only setStates after awaiting its fetch; safe, intentional.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
+
+  async function onSearchChange(value: string) {
+    setQuery(value);
+    if (value.trim() && subtree === null && !searching) {
+      setSearching(true);
+      try {
+        setSubtree(await getSubtree(relPath));
+      } catch {
+        setSubtree([]);
+      } finally {
+        setSearching(false);
+      }
+    }
+  }
+
   async function handleRetag() {
     setRetagging(true);
     setRetagMsg(null);
     setRetagProgress({ done: 0, total: 0 });
     try {
-      const res = await retagUntagged(folderId, setRetagProgress);
+      const res = await retagUntagged(relPath, setRetagProgress);
       if (res.total === 0) {
-        setRetagMsg("Everything here is already tagged.");
+        setRetagMsg("Every PDF here is already tagged.");
       } else {
         setRetagMsg(
-          `Tagged ${res.tagged} of ${res.total} document${
+          `Tagged ${res.tagged} of ${res.total} PDF${
             res.total === 1 ? "" : "s"
           }${res.failed ? ` · ${res.failed} still failed (try again)` : ""}.`
         );
@@ -106,41 +109,20 @@ export function FolderView({ folderId }: { folderId: string }) {
     }
   }
 
-  async function onSearchChange(value: string) {
-    setQuery(value);
-    // Lazily fetch the subtree the first time the user searches.
-    if (value.trim() && subtree === null && !searching) {
-      setSearching(true);
-      try {
-        setSubtree(await getSubtreeDocuments(folderId));
-      } finally {
-        setSearching(false);
-      }
+  async function handleTagOne(file: FileItem) {
+    setTaggingPath(file.relPath);
+    try {
+      await tagDocument(file.relPath);
+      await load();
+    } finally {
+      setTaggingPath(null);
     }
   }
-
-  const load = useCallback(async () => {
-    try {
-      const contents = await getFolderContents(folderId);
-      setError(null);
-      setData(contents);
-      setSubtree(null); // invalidate search cache; refetched on next search
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load folder.");
-    } finally {
-      setLoading(false);
-    }
-  }, [folderId]);
-
-  useEffect(() => {
-    // load() only setStates after awaiting its fetch — safe to call in effect.
-    load();
-  }, [load]);
 
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="h-5 w-64 animate-pulse rounded bg-slate-200" />
+        {!atRoot && <div className="h-5 w-64 animate-pulse rounded bg-slate-200" />}
         <div className="h-8 w-48 animate-pulse rounded bg-slate-200" />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2].map((i) => (
@@ -154,7 +136,7 @@ export function FolderView({ folderId }: { folderId: string }) {
   if (error || !data) {
     return (
       <div className="space-y-4">
-        <Breadcrumbs trail={[]} />
+        {!atRoot && <Breadcrumbs trail={[]} />}
         <div className="card p-5 text-sm text-red-600">
           {error ?? "Folder not found."}
         </div>
@@ -162,115 +144,48 @@ export function FolderView({ folderId }: { folderId: string }) {
     );
   }
 
-  const { folder, breadcrumbs, subfolders, documents } = data;
-
-  const hasFiles = (e: React.DragEvent) =>
-    Array.from(e.dataTransfer.types).includes("Files");
-
-  function onDragEnter(e: React.DragEvent) {
-    if (!hasFiles(e)) return;
-    e.preventDefault();
-    dragDepth.current += 1;
-    setDragging(true);
-  }
-  function onDragOver(e: React.DragEvent) {
-    if (!hasFiles(e)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-  }
-  function onDragLeave(e: React.DragEvent) {
-    if (!hasFiles(e)) return;
-    dragDepth.current -= 1;
-    if (dragDepth.current <= 0) {
-      dragDepth.current = 0;
-      setDragging(false);
-    }
-  }
-  async function onDrop(e: React.DragEvent) {
-    if (!hasFiles(e)) return;
-    e.preventDefault();
-    dragDepth.current = 0;
-    setDragging(false);
-    // Read entries synchronously — the DataTransfer is only valid during the event.
-    const entries = getDroppedEntries(e.dataTransfer);
-    if (entries.length === 0) return;
-    setReading(true);
-    try {
-      const root = await buildImportTree(entries);
-      setImportRoot(root);
-    } finally {
-      setReading(false);
-    }
-  }
+  const { breadcrumbs, folders, files } = data;
+  const currentName = atRoot
+    ? "Home"
+    : breadcrumbs[breadcrumbs.length - 1]?.name ?? "Home";
 
   return (
-    <div
-      className="relative space-y-6"
-      onDragEnter={onDragEnter}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-    >
-      {(dragging || reading) && (
-        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-brand-500 bg-brand-50/80 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-2 text-center">
-            <UploadIcon width={32} height={32} className="text-brand-600" />
-            <p className="text-sm font-semibold text-brand-700">
-              {reading
-                ? "Reading folder…"
-                : `Drop to import into “${folder?.name}”`}
-            </p>
-            <p className="text-xs text-brand-600">
-              Subfolders and files are recreated automatically
-            </p>
-          </div>
-        </div>
-      )}
-      <Breadcrumbs trail={breadcrumbs} />
+    <div className="space-y-6">
+      {!atRoot && <Breadcrumbs trail={breadcrumbs} />}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
-            <FolderIcon width={22} height={22} />
-          </span>
-          <h1 className="text-xl font-semibold tracking-tight text-slate-900">
-            {folder?.name}
-          </h1>
-        </div>
-        <div className="flex gap-2">
-          <button
-            className="btn-secondary"
-            onClick={handleRetag}
-            disabled={retagging}
-            title="Find every document here (and in subfolders) still missing a title/tags and tag it"
-          >
-            <TagIcon width={16} height={16} />
-            {retagging
-              ? `Tagging… ${retagProgress?.done ?? 0}/${
-                  retagProgress?.total ?? 0
-                }`
-              : "Tag untagged"}
-          </button>
-          <button className="btn-secondary" onClick={() => setNewSub(true)}>
-            <PlusIcon width={16} height={16} />
-            New category
-          </button>
-          <button className="btn-primary" onClick={() => setNewDoc(true)}>
-            <UploadIcon width={16} height={16} />
-            Upload document
-          </button>
-        </div>
+        {!atRoot ? (
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+              <FolderIcon width={22} height={22} />
+            </span>
+            <h1 className="text-xl font-semibold tracking-tight text-slate-900">
+              {currentName}
+            </h1>
+          </div>
+        ) : (
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+            Files
+          </h2>
+        )}
+        <button
+          className="btn-secondary"
+          onClick={handleRetag}
+          disabled={retagging}
+          title="Find every PDF here (and in subfolders) still missing a title/tags and tag it"
+        >
+          <TagIcon width={16} height={16} />
+          {retagging
+            ? `Tagging… ${retagProgress?.done ?? 0}/${retagProgress?.total ?? 0}`
+            : "Tag untagged"}
+        </button>
       </div>
 
-      <p className="-mt-2 text-xs text-slate-400">
-        Tip: drag a folder from your computer anywhere onto this page to import
-        its whole structure at once.
-        {retagMsg && (
-          <span className="ml-1 font-medium text-brand-600">{retagMsg}</span>
-        )}
-      </p>
+      {retagMsg && (
+        <p className="-mt-2 text-xs font-medium text-brand-600">{retagMsg}</p>
+      )}
 
-      {/* Search — matches document names, parsed titles, and AI tags */}
+      {/* Search — matches file names, extracted titles, and AI tags */}
       <div className="relative">
         <SearchIcon
           width={17}
@@ -279,7 +194,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         />
         <input
           className="input pl-9 pr-9"
-          placeholder={`Search drawings & tags in “${folder?.name}” (incl. subfolders)…`}
+          placeholder={`Search titles & tags in “${currentName}” (incl. subfolders)…`}
           value={query}
           onChange={(e) => onSearchChange(e.target.value)}
         />
@@ -303,221 +218,79 @@ export function FolderView({ folderId }: { folderId: string }) {
         />
       ) : (
         <>
-          {/* Subfolders / categories */}
-          {subfolders.length > 0 && (
+          {folders.length > 0 && (
             <section className="space-y-3">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Categories
+                Folders
               </h2>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {subfolders.map((f) => (
-              <div
-                key={f.id}
-                className="card group relative flex items-center gap-3 p-4 transition-shadow hover:shadow-md"
-              >
-                <Link
-                  href={`/folders/${f.id}`}
-                  className="flex min-w-0 flex-1 items-center gap-3"
-                >
-                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
-                    <FolderIcon width={18} height={18} />
-                  </span>
-                  <span className="truncate font-medium text-slate-800">
-                    {f.name}
-                  </span>
-                </Link>
-                <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                  <button
-                    onClick={() => setRenameSub(f)}
-                    className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                    title="Rename"
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {folders.map((f) => (
+                  <Link
+                    key={f.relPath}
+                    href={browseHref(f.relPath)}
+                    className="card group flex items-center gap-3 p-4 transition-shadow hover:shadow-md"
                   >
-                    <PencilIcon width={15} height={15} />
-                  </button>
-                  <button
-                    onClick={() => setDeleteSub(f)}
-                    className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-red-600"
-                    title="Delete"
-                  >
-                    <TrashIcon width={15} height={15} />
-                  </button>
-                </div>
-                <ChevronRight
-                  className="text-slate-300"
-                  width={16}
-                  height={16}
-                />
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                      <FolderIcon width={18} height={18} />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium text-slate-800">
+                      {f.name}
+                    </span>
+                    <ChevronRight className="text-slate-300" width={16} height={16} />
+                  </Link>
+                ))}
               </div>
-            ))}
-          </div>
-        </section>
-      )}
+            </section>
+          )}
 
-      {/* Documents */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Documents
-        </h2>
-
-        {documents.length === 0 ? (
-          <div className="card flex flex-col items-center justify-center gap-3 py-12 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-              <FileIcon width={22} height={22} />
-            </span>
-            <div>
-              <p className="font-medium text-slate-700">No documents here yet</p>
-              <p className="text-sm text-slate-400">
-                Upload a drawing (PDF) or add a category to organize further.
-              </p>
-            </div>
-            <button className="btn-primary" onClick={() => setNewDoc(true)}>
-              <UploadIcon width={16} height={16} />
-              Upload document
-            </button>
-          </div>
-        ) : (
-          <div className="card divide-y divide-slate-100">
-            {documents.map((doc) => (
-              <DocumentRow
-                key={doc.id}
-                doc={doc}
-                onUpload={() => setUploadTo(doc)}
-                onRename={() => setRenameDoc(doc)}
-                onDelete={() => setDeleteDoc(doc)}
-                onTagClick={(t) => onSearchChange(t)}
-              />
-            ))}
-          </div>
-        )}
-      </section>
+          <section className="space-y-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Documents
+            </h2>
+            {files.length === 0 ? (
+              <div className="card flex flex-col items-center justify-center gap-3 py-12 text-center">
+                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                  <FileIcon width={22} height={22} />
+                </span>
+                <div>
+                  <p className="font-medium text-slate-700">No files here</p>
+                  <p className="text-sm text-slate-400">
+                    This folder has no files — open a subfolder above.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="card divide-y divide-slate-100">
+                {files.map((file) => (
+                  <FileRow
+                    key={file.relPath}
+                    file={file}
+                    tagging={taggingPath === file.relPath}
+                    onTag={() => handleTagOne(file)}
+                    onTagClick={(t) => onSearchChange(t)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
         </>
       )}
-
-      {/* Dialogs */}
-      <NameDialog
-        open={newSub}
-        title="New category"
-        label="Category name"
-        placeholder="e.g. Foundation, Switches, Plumbing…"
-        submitLabel="Create"
-        onClose={() => setNewSub(false)}
-        onSubmit={async (name) => {
-          await createFolder(name, folderId);
-          await load();
-        }}
-      />
-      <NameDialog
-        open={!!renameSub}
-        title="Rename category"
-        label="Category name"
-        initialValue={renameSub?.name ?? ""}
-        onClose={() => setRenameSub(null)}
-        onSubmit={async (name) => {
-          if (renameSub) await renameFolder(renameSub.id, name);
-          await load();
-        }}
-      />
-      <ConfirmDialog
-        open={!!deleteSub}
-        title="Delete category"
-        message={
-          <>
-            Delete <strong>{deleteSub?.name}</strong> and everything inside it?
-            This cannot be undone.
-          </>
-        }
-        onClose={() => setDeleteSub(null)}
-        onConfirm={async () => {
-          if (deleteSub) await deleteFolder(deleteSub.id);
-          await load();
-        }}
-      />
-
-      <UploadDialog
-        open={newDoc}
-        title="Upload document"
-        withName
-        submitLabel="Create & upload"
-        onClose={() => setNewDoc(false)}
-        onSubmit={async ({ file, notes, name }) => {
-          const doc = await createDocumentWithFirstRevision(
-            folderId,
-            name,
-            file,
-            notes
-          );
-          if (doc.latest)
-            await tagDocument(doc.id, doc.latest.file_path, file.name);
-          await load();
-        }}
-      />
-      <UploadDialog
-        open={!!uploadTo}
-        title={`New revision · ${uploadTo?.name ?? ""}`}
-        submitLabel="Upload revision"
-        onClose={() => setUploadTo(null)}
-        onSubmit={async ({ file, notes }) => {
-          if (uploadTo) {
-            const rev = await uploadRevision(uploadTo.id, file, notes);
-            await tagDocument(uploadTo.id, rev.file_path, file.name);
-          }
-          await load();
-        }}
-      />
-      <NameDialog
-        open={!!renameDoc}
-        title="Rename document"
-        label="Document title"
-        initialValue={renameDoc ? documentDisplayName(renameDoc) : ""}
-        onClose={() => setRenameDoc(null)}
-        onSubmit={async (name) => {
-          if (renameDoc) await renameDocument(renameDoc.id, name);
-          await load();
-        }}
-      />
-      <ConfirmDialog
-        open={!!deleteDoc}
-        title="Delete document"
-        message={
-          <>
-            Delete <strong>{deleteDoc?.name}</strong> and all{" "}
-            {deleteDoc?.revisions.length} revision(s)? This cannot be undone.
-          </>
-        }
-        onClose={() => setDeleteDoc(null)}
-        onConfirm={async () => {
-          if (deleteDoc) await deleteDocument(deleteDoc.id);
-          await load();
-        }}
-      />
-
-      <ImportDialog
-        root={importRoot}
-        targetName={folder?.name ?? ""}
-        targetFolderId={folderId}
-        onClose={() => setImportRoot(null)}
-        onDone={load}
-      />
     </div>
   );
 }
 
-function DocumentRow({
-  doc,
-  onUpload,
-  onRename,
-  onDelete,
+function FileRow({
+  file,
+  tagging,
+  onTag,
   onTagClick,
 }: {
-  doc: DocumentWithRevisions;
-  onUpload: () => void;
-  onRename: () => void;
-  onDelete: () => void;
+  file: FileItem;
+  tagging: boolean;
+  onTag: () => void;
   onTagClick: (tag: string) => void;
 }) {
-  const latest = doc.latest;
-  const olderCount = Math.max(0, doc.revisions.length - 1);
-
+  const display = documentDisplayName(file);
   return (
     <div className="group flex flex-wrap items-center gap-3 px-4 py-3.5">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
@@ -526,73 +299,61 @@ function DocumentRow({
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <Link
-            href={`/documents/${doc.id}`}
+          <a
+            href={fileUrl(file.relPath)}
+            target="_blank"
+            rel="noopener noreferrer"
             className="truncate font-medium text-slate-900 hover:text-brand-600 hover:underline"
           >
-            {documentDisplayName(doc)}
-          </Link>
-          {latest ? (
-            <span className="badge-green">Rev {latest.revision_number}</span>
-          ) : (
-            <span className="badge-amber">No file</span>
+            {display}
+          </a>
+          {file.isPdf && !file.title && (
+            <span className="badge-amber">Untagged</span>
           )}
-          {olderCount > 0 && (
-            <span className="badge-slate">
-              <ClockIcon width={12} height={12} />
-              {olderCount} archived
-            </span>
-          )}
+          {file.stale && <span className="badge-amber">Changed</span>}
         </div>
         <p className="mt-0.5 truncate text-xs text-slate-400">
-          {latest
-            ? `${latest.file_name} · ${formatBytes(
-                latest.file_size
-              )} · ${formatDateShort(latest.created_at)}`
-            : "No revisions uploaded yet"}
+          {display !== file.name ? `${file.name} · ` : ""}
+          {formatBytes(file.size)} · {formatDateFromMs(file.mtimeMs)}
         </p>
-        {doc.tags.length > 0 && (
+        {file.tags.length > 0 && (
           <div className="mt-1.5">
-            <TagBadges tags={doc.tags} onClick={onTagClick} />
+            <TagBadges tags={file.tags} onClick={onTagClick} />
           </div>
         )}
       </div>
 
       <div className="flex items-center gap-1">
-        {latest && (
-          <a
-            href={getFileUrl(latest.file_path)}
-            target="_blank"
-            rel="noopener noreferrer"
+        {file.isPdf && (
+          <button
+            onClick={onTag}
+            disabled={tagging}
             className="btn-ghost px-2"
-            title="View current revision"
+            title={file.title ? "Re-tag this drawing" : "Tag this drawing"}
           >
-            <EyeIcon width={17} height={17} />
-          </a>
+            <TagIcon
+              width={17}
+              height={17}
+              className={tagging ? "animate-pulse text-brand-500" : ""}
+            />
+          </button>
         )}
-        <button
-          onClick={onUpload}
+        <a
+          href={fileUrl(file.relPath)}
+          target="_blank"
+          rel="noopener noreferrer"
           className="btn-ghost px-2"
-          title="Upload new revision"
+          title="Preview"
         >
-          <UploadIcon width={17} height={17} />
-        </button>
-        <div className="ml-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-          <button
-            onClick={onRename}
-            className="btn-ghost px-2"
-            title="Rename document"
-          >
-            <PencilIcon width={16} height={16} />
-          </button>
-          <button
-            onClick={onDelete}
-            className="btn-ghost px-2 hover:text-red-600"
-            title="Delete document"
-          >
-            <TrashIcon width={16} height={16} />
-          </button>
-        </div>
+          <EyeIcon width={17} height={17} />
+        </a>
+        <a
+          href={fileUrl(file.relPath, true)}
+          className="btn-ghost px-2"
+          title="Download a copy"
+        >
+          <DownloadIcon width={17} height={17} />
+        </a>
       </div>
     </div>
   );
@@ -604,15 +365,13 @@ function SearchResults({
   loading,
   onTagClick,
 }: {
-  rows: SearchResult[] | null;
+  rows: SearchRow[] | null;
   query: string;
   loading: boolean;
   onTagClick: (tag: string) => void;
 }) {
   if (loading && rows === null) {
-    return (
-      <div className="card h-24 animate-pulse bg-slate-100" />
-    );
+    return <div className="card h-24 animate-pulse bg-slate-100" />;
   }
 
   const results = (rows ?? []).filter((r) => matchesQuery(r, query));
@@ -635,61 +394,53 @@ function SearchResults({
         {results.length} result{results.length === 1 ? "" : "s"} for “{query}”
       </h2>
       <div className="card divide-y divide-slate-100">
-        {results.map(({ document: doc, folderName }) => {
-          const latest = doc.latest;
-          return (
-            <div
-              key={doc.id}
-              className="flex flex-wrap items-center gap-3 px-4 py-3.5"
-            >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-                <FileIcon width={20} height={20} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <Link
-                    href={`/documents/${doc.id}`}
-                    className="truncate font-medium text-slate-900 hover:text-brand-600 hover:underline"
-                  >
-                    {documentDisplayName(doc)}
-                  </Link>
-                  {latest && (
-                    <span className="badge-green">
-                      Rev {latest.revision_number}
-                    </span>
-                  )}
-                  <span className="badge-slate">
-                    <FolderIcon width={12} height={12} />
-                    {folderName}
-                  </span>
+        {results.map(({ file, folderName }) => (
+          <div
+            key={file.relPath}
+            className="flex flex-wrap items-center gap-3 px-4 py-3.5"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+              <FileIcon width={20} height={20} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <a
+                  href={fileUrl(file.relPath)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="truncate font-medium text-slate-900 hover:text-brand-600 hover:underline"
+                >
+                  {documentDisplayName(file)}
+                </a>
+                <span className="badge-slate">
+                  <FolderIcon width={12} height={12} />
+                  {folderName}
+                </span>
+              </div>
+              {documentDisplayName(file) !== file.name && (
+                <p className="mt-0.5 truncate text-xs text-slate-400">
+                  {file.name}
+                </p>
+              )}
+              {file.tags.length > 0 && (
+                <div className="mt-1.5">
+                  <TagBadges tags={file.tags} onClick={onTagClick} />
                 </div>
-                {documentDisplayName(doc) !== doc.name && (
-                  <p className="mt-0.5 truncate text-xs text-slate-400">
-                    {doc.name}
-                  </p>
-                )}
-                {doc.tags.length > 0 && (
-                  <div className="mt-1.5">
-                    <TagBadges tags={doc.tags} onClick={onTagClick} />
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center gap-1">
-                {latest && (
-                  <a
-                    href={getFileUrl(latest.file_path)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn-ghost px-2"
-                    title="View current revision"
-                  >
-                    <EyeIcon width={17} height={17} />
-                  </a>
-                )}
-              </div>
+              )}
             </div>
-          );
-        })}
+            <div className="flex items-center gap-1">
+              <a
+                href={fileUrl(file.relPath)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-ghost px-2"
+                title="Preview"
+              >
+                <EyeIcon width={17} height={17} />
+              </a>
+            </div>
+          </div>
+        ))}
       </div>
     </section>
   );

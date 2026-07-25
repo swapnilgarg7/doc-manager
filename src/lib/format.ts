@@ -1,13 +1,20 @@
 /**
- * The name to show for a document. Once the AI has extracted the drawing's
- * title from its title block, that becomes the document's headline; until then
- * (or if extraction failed) we fall back to the uploaded name.
+ * The name to show for a file. Once the AI has extracted the drawing's title
+ * from its title block, that becomes the headline; until then (or if extraction
+ * failed, or it isn't a PDF) we fall back to the file name on disk.
  */
-export function documentDisplayName(doc: {
+export function documentDisplayName(file: {
   name: string;
-  drawing_title?: string | null;
+  title?: string | null;
 }): string {
-  return doc.drawing_title?.trim() || doc.name;
+  return file.title?.trim() || file.name;
+}
+
+/** Build a link to the browse page for a folder relPath ("" = Home). */
+export function browseHref(relPath: string): string {
+  if (!relPath) return "/";
+  const encoded = relPath.split("/").map(encodeURIComponent).join("/");
+  return `/browse/${encoded}`;
 }
 
 export function formatBytes(bytes: number | null | undefined): string {
@@ -30,6 +37,13 @@ export function formatDate(iso: string): string {
 
 export function formatDateShort(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
+    dateStyle: "medium",
+  });
+}
+
+/** Format an epoch-ms timestamp (e.g. a file's mtime) as a short date. */
+export function formatDateFromMs(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, {
     dateStyle: "medium",
   });
 }

@@ -1,46 +1,52 @@
-export interface Folder {
-  id: string;
-  parent_id: string | null;
-  name: string;
-  created_at: string;
+/** App config: the local folder the user chose to scan (absolute path). */
+export interface AppConfig {
+  root: string | null;
 }
 
-export interface Document {
-  id: string;
-  folder_id: string;
+/** A subfolder inside the scanned tree, identified by its path relative to root. */
+export interface FolderEntry {
   name: string;
-  drawing_title: string | null;
+  relPath: string;
+}
+
+/** A file inside the scanned tree, plus any extracted title/tags. */
+export interface FileItem {
+  name: string;
+  relPath: string;
+  size: number;
+  mtimeMs: number;
+  isPdf: boolean;
+  /** Extracted drawing title, or null if not (yet) tagged / not a PDF. */
+  title: string | null;
   tags: string[];
-  created_at: string;
+  /** True if the file changed on disk since it was tagged (metadata is stale). */
+  stale: boolean;
 }
 
-export interface Revision {
-  id: string;
-  document_id: string;
-  revision_number: number;
-  file_name: string;
-  file_path: string;
-  file_size: number | null;
-  content_type: string | null;
-  notes: string | null;
-  created_at: string;
+/** Contents of one directory. */
+export interface DirListing {
+  path: string; // "" = root
+  breadcrumbs: FolderEntry[]; // root → … → current (excludes Home)
+  folders: FolderEntry[];
+  files: FileItem[];
 }
 
-/** A document plus its revisions, newest revision first. */
-export interface DocumentWithRevisions extends Document {
-  revisions: Revision[];
-  /** Highest-numbered (current/main) revision, or null if none uploaded yet. */
-  latest: Revision | null;
-}
-
+/** Result of extracting a drawing's metadata from its title block. */
 export interface DrawingMeta {
   title: string | null;
   tags: string[];
 }
 
-export interface FolderContents {
-  folder: Folder | null; // null = root level
-  breadcrumbs: Folder[]; // root → ... → current (excludes root sentinel)
-  subfolders: Folder[];
-  documents: DocumentWithRevisions[];
+/** A search hit: a file plus the folder it lives in. */
+export interface SearchRow {
+  file: FileItem;
+  folderPath: string; // relPath of the containing folder ("" = root)
+  folderName: string;
+}
+
+export interface Stats {
+  folders: number;
+  files: number;
+  pdfs: number;
+  tagged: number;
 }

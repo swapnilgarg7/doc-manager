@@ -1,14 +1,10 @@
 import Link from "next/link";
-import type { Folder } from "@/lib/types";
+import type { FolderEntry } from "@/lib/types";
+import { browseHref } from "@/lib/format";
 import { HomeIcon, ChevronRight } from "./icons";
 
-export function Breadcrumbs({
-  trail,
-  currentName,
-}: {
-  trail: Folder[];
-  currentName?: string;
-}) {
+/** Path-based breadcrumbs: Home → … → current folder. */
+export function Breadcrumbs({ trail }: { trail: FolderEntry[] }) {
   return (
     <nav className="flex flex-wrap items-center gap-1 text-sm text-slate-500">
       <Link
@@ -19,9 +15,9 @@ export function Breadcrumbs({
         Home
       </Link>
       {trail.map((f, i) => {
-        const isLast = i === trail.length - 1 && !currentName;
+        const isLast = i === trail.length - 1;
         return (
-          <span key={f.id} className="flex items-center gap-1">
+          <span key={f.relPath} className="flex items-center gap-1">
             <ChevronRight width={14} height={14} className="text-slate-300" />
             {isLast ? (
               <span className="px-1.5 py-1 font-medium text-slate-800">
@@ -29,7 +25,7 @@ export function Breadcrumbs({
               </span>
             ) : (
               <Link
-                href={`/folders/${f.id}`}
+                href={browseHref(f.relPath)}
                 className="rounded-md px-1.5 py-1 hover:bg-slate-100 hover:text-slate-700"
               >
                 {f.name}
@@ -38,14 +34,6 @@ export function Breadcrumbs({
           </span>
         );
       })}
-      {currentName && (
-        <span className="flex items-center gap-1">
-          <ChevronRight width={14} height={14} className="text-slate-300" />
-          <span className="px-1.5 py-1 font-medium text-slate-800">
-            {currentName}
-          </span>
-        </span>
-      )}
     </nav>
   );
 }

@@ -3,26 +3,24 @@ import type { DrawingMeta } from "@/lib/types";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Ask the server to extract the drawing title + tags for an uploaded PDF and
- * save them onto the document. Best-effort: never throws (returns null on any
- * failure) so it can be fired alongside uploads without breaking the flow.
+ * Ask the local server to extract a PDF's drawing title + tags and save them to
+ * the index. The server reads the file from disk and sends only the title-block
+ * snippet to Azure — the file itself never leaves the machine.
  *
- * Retries transient failures (429 rate-limits, 5xx, network errors) with
- * exponential backoff — this is what makes bulk imports of many PDFs reliable,
- * since Azure OpenAI throttles bursts of concurrent requests.
+ * Best-effort: never throws (returns null on any failure) so it can be fired
+ * alongside a bulk scan without breaking the flow. Retries transient failures
+ * (429 rate-limits, 5xx, network errors) with exponential backoff.
  */
 export async function tagDocument(
-  documentId: string,
-  filePath: string,
-  fileName: string,
+  relPath: string,
   { retries = 4 }: { retries?: number } = {}
 ): Promise<DrawingMeta | null> {
   for (let attempt = 0; ; attempt++) {
     try {
-      const res = await fetch("/api/extract-tag", {
+      const res = await fetch("/api/tag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ documentId, filePath, fileName }),
+        body: JSON.stringify({ path: relPath }),
       });
       if (res.ok) return (await res.json()) as DrawingMeta;
       // Retry throttling / transient server errors; give up on client errors.

@@ -1,45 +1,48 @@
-# Construction Document Manager
+# Construction Document Manager (local)
 
-A lightweight ERP-style document library for construction projects, built with
-**Next.js + Tailwind CSS + Supabase**.
+A lightweight document library for construction drawings that runs **entirely on
+your own machine**. Point it at a folder on your computer; it scans the files,
+reads each **PDF's title block** to extract the drawing **title** and
+**classification tags**, and lets you **search** your drawings by title, tag, or
+file name.
 
-Organize documents into **Sections** (e.g. _Drawings_, _Materials_ — and any
-custom ones you add), nest **Categories** to any depth (e.g. _Materials →
-Foundation → Switches_), and upload drawings (PDFs, images, any file) as
-**documents**. Every re-upload of a document is a new **revision** — the newest
-one automatically becomes the _current/main_ revision, and older ones are kept in
-an **archive** you can still preview or download.
+> **Your files never leave this computer.** There is no cloud storage and no
+> upload. The app reads files directly from your local disk. The only thing that
+> ever goes out is a tiny **snippet** of each PDF's title block (the extracted
+> text, or a cropped image of just the bottom-right corner) sent to Azure OpenAI
+> for tagging — never the whole file.
 
 ## Features
 
-- 📂 **Unlimited folder nesting** — sections → categories → sub-categories → …
-- 🗂️ **Drag-and-drop folder import** — drop an entire folder from your computer
-  onto a section (or into any folder) and the whole subfolder tree + files are
-  recreated automatically. Re-dropping an updated folder adds new **revisions**
-  to matching documents instead of duplicating them.
-- 🏷️ **Automatic AI tagging** — on upload, the PDF's title block (bottom-right)
-  is parsed deterministically with pdfjs, then Azure OpenAI extracts the exact
-  **drawing title** and assigns **classification tags** (Plumbing, Drainage,
-  Structural, …).
-- 🔎 **Category-scoped search** — search within a folder (and everything nested
-  under it) by document name, drawing title, or tag. Search "Plumbing" inside
-  _Port-a-Cabin_ and only that folder's plumbing drawings come up.
-- 📄 **Documents with revision control** — newest upload is always "main", older
-  revisions are archived automatically (never deleted unless you say so)
-- 👁️ **In-browser preview** for PDFs and images, plus one-click download
-- ➕ Add/rename/delete sections, categories, documents, and individual revisions
-- 📊 Dashboard counts (sections / categories / documents / revisions)
-- 🎨 Clean, responsive UI
+- 📁 **Scan a local folder** — choose any folder on your disk; the app mirrors
+  its real subfolder tree and files. Nothing is copied or moved.
+- 🏷️ **Automatic AI tagging** — for each PDF, the bottom-right title block is
+  parsed deterministically with pdfjs, then Azure OpenAI extracts the exact
+  **drawing title** and assigns **tags** (Plumbing, Drainage, Structural, …).
+  Scanned/image-only PDFs are rendered and read via the vision model (OCR).
+- 🔎 **Scoped search** — search within a folder (and everything nested under it)
+  by file name, extracted title, or tag.
+- 👁️ **Preview & download** — open any file inline in a new tab, or download a copy.
+- 🔒 **Read-only over your files** — the app never renames, moves, or deletes your
+  files. Extracted titles/tags live in a small local index only.
 
-## Data model
+## How it works
 
-| Table       | Purpose                                                        |
-| ----------- | ------------------------------------------------------------- |
-| `folders`   | Self-referencing tree. `parent_id IS NULL` = a top Section.   |
-| `documents` | A logical drawing/spec that lives in a folder.                |
-| `revisions` | Each uploaded file. Highest `revision_number` = current/main. |
+```
+choose a local folder
+   └─ server scans the directory tree (Node fs, on localhost)
+        for each PDF:
+          ├─ has a text layer?  ──► pdfjs reads the bottom-right title block
+          └─ scanned / image?   ──► mupdf renders page 1 → crop bottom-right → image
+                 ──► Azure OpenAI (title + tags)  ← only the snippet is sent
+                 ──► saved to a LOCAL index (.data/index.json)
+                 ──► searchable by title / tag / name
+```
 
-Files are stored in a Supabase Storage bucket named **`documents`**.
+The extracted metadata is stored in `./.data/index.json`, keyed by each file's
+path **relative to the chosen folder**, along with the file's size + modified
+time. If a file changes on disk, its metadata is treated as stale and re-tagged
+on the next **Tag untagged** run. This folder is gitignored and stays local.
 
 ---
 
@@ -51,46 +54,27 @@ Files are stored in a Supabase Storage bucket named **`documents`**.
 npm install
 ```
 
-### 2. Create a Supabase project
+### 2. Configure Azure OpenAI (for tagging)
 
-Go to [supabase.com](https://supabase.com), create a project, then grab your
-credentials from **Project Settings → API**.
-
-### 3. Configure environment variables
-
-Copy the example file and fill in your values:
+Copy the example env file and fill in your Azure OpenAI values:
 
 ```bash
 cp .env.local.example .env.local
 ```
 
 ```env
-NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR-ANON-PUBLIC-KEY
-
-# Azure OpenAI — powers title extraction + tagging (server-side only)
+# Used server-side only — never reaches the browser. Only the title-block
+# snippet of a PDF is ever sent; the file itself never leaves your machine.
 AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com/
 AZURE_OPENAI_DEPLOYMENT=gpt-5.4-mini
 AZURE_OPENAI_API_VERSION=2024-12-01-preview
 AZURE_OPENAI_API_KEY=YOUR-AZURE-OPENAI-KEY
 ```
 
-### 4. Create the database schema
+> There is **no database and no storage bucket to set up.** The folder to scan is
+> chosen in the app, not in env.
 
-Open the Supabase Dashboard → **SQL Editor** → **New query**, paste the contents
-of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This will:
-
-- create the `folders`, `documents`, and `revisions` tables (documents include
-  `drawing_title` + `tags` columns for AI tagging/search)
-- create the public **`documents`** storage bucket
-- set permissive access policies (no auth yet — see the note below)
-- seed two starter sections: **Drawings** and **Materials**
-
-> **Already ran an earlier version of `schema.sql`?** Run the incremental
-> migration [`supabase/migrations/0002_document_tags.sql`](./supabase/migrations/0002_document_tags.sql)
-> to add the `drawing_title` and `tags` columns.
-
-### 5. Run the app
+### 3. Run the app
 
 ```bash
 npm run dev
@@ -102,91 +86,39 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## How to use it
 
-1. **Home** shows your Sections. Click **New section** to add one (e.g.
-   _Permits_) alongside Drawings and Materials.
-2. **Open a section** → add a **category** (e.g. _Foundation_, _Switches_) with
-   **New category**. Categories can nest as deep as you like.
-3. Inside any folder, click **Upload document**, give it a name (e.g.
-   _Foundation Layout Plan_) and attach the first PDF.
-4. To revise a drawing, open the document (or use the ⬆ button on its row) and
-   **Upload new revision**. The new file becomes the current revision; the
-   previous one moves to **Archived revisions**.
-5. Click 👁 to preview inline, or ⬇ to download.
+1. On the **Home** page, click **Choose folder** and paste the absolute path to a
+   folder on this computer (e.g. `/Users/you/Drawings`). The app scans it and
+   shows the real folder tree.
+2. Click **Tag untagged** on any folder to run title/tag extraction over every
+   PDF in it (and everything nested under it) that isn't tagged yet. Tagging runs
+   through a small concurrency pool with automatic retry on rate-limits, so large
+   folders tag reliably; re-running fills in anything that was missed.
+3. Use the **search bar** on any folder to find drawings by title, tag, or file
+   name — results are scoped to that folder and everything beneath it.
+4. Click 👁 to preview a file, ⬇ to download a copy, or 🏷 to (re-)tag a single PDF.
+5. Changed a drawing on disk? It shows a **Changed** badge; **Tag untagged**
+   re-reads it.
 
-### Bulk import (drag & drop a folder)
+> Non-PDF files are listed and searchable by name, but not tagged.
 
-Instead of creating everything by hand, drag a folder straight from Finder /
-Explorer:
-
-- **Onto a section card** on the home page, or **anywhere on an open folder
-  page**.
-- A preview shows exactly what will be created (how many categories and files).
-  A single dropped folder can either be merged into the target or recreated as a
-  subfolder — your choice.
-- Every file becomes a document (revision 1). If a document with the same name
-  already exists in that location, the file is added as its **next revision** —
-  so dropping an updated copy of your folder later just versions the changed
-  drawings automatically.
-
-> Folder drag-and-drop uses the browser's File & Directory Entries API, which
-> works in Chrome, Edge, and Safari.
-
-### Titles, tags & search
-
-- When a **PDF** is uploaded (single, revision, or via bulk import), the server
-  reads the bottom-right **title block** and sends it to Azure OpenAI, which
-  returns the exact **drawing title** and a few **classification tags**, saved
-  on the document. Two paths, chosen automatically:
-  - **Text PDFs** — pdfjs extracts the title-block text (fast, cheap).
-  - **Scanned / image-only PDFs** — mupdf renders the page, the bottom-right
-    corner is cropped, and the **vision model reads it (OCR)**. This is what
-    makes tagging work even when the title is baked into the image.
-- Tags appear as chips on each document; click one to search it.
-- Use the **search bar** on any folder page to find drawings by name, title, or
-  tag. Results are scoped to that folder **and everything nested under it**, so
-  the same query means "within this category".
-- Missed or wrong? Open the document and hit **Retag** to re-run extraction on
-  the current revision.
-- Bulk-imported a lot at once? Tagging runs in the background through a small
-  request pool (with automatic retry on rate-limits) so large drops tag
-  reliably. If a batch was interrupted (e.g. the tab was closed mid-run), click
-  **Tag untagged** on any folder to find every document in it — and everything
-  nested under it — that's still missing a title/tags and fill them in.
-
-> Non-PDF files are stored but not tagged.
-
-## How the AI tagging pipeline works
-
-```
-upload PDF
-  ├─ has text layer?  ──► pdfjs extracts bottom-right title-block text
-  └─ scanned/image?   ──► mupdf renders page 1 → crop bottom-right → image
-           ──► Azure OpenAI (gpt-5.4-mini, text or vision) → { title, tags }
-           ──► saved to documents.drawing_title / documents.tags   [server-side]
-           ──► searchable, scoped to the current folder subtree
-```
-
-The Azure key lives only in server env vars and is used exclusively by the
-`/api/extract-tag` route — it never reaches the browser.
+To point at a different folder later, use **Change folder** on the Home page.
 
 ---
 
-## A note on authentication
-
-This build has **no login** — anyone who can reach the app (and its anon key)
-can read and write. That was an intentional choice to keep the first version
-simple. When you're ready to lock it down:
-
-1. Enable an auth provider in Supabase (email/password, magic link, etc.).
-2. Replace the permissive `"public all"` RLS policies in `schema.sql` with
-   policies scoped to `auth.uid()` / `authenticated`.
-3. Add a login page and wrap the app with the Supabase auth session.
-
 ## Scripts
 
-| Command         | What it does                    |
-| --------------- | ------------------------------- |
-| `npm run dev`   | Start the dev server            |
-| `npm run build` | Production build                |
-| `npm run start` | Serve the production build      |
-| `npm run lint`  | Run ESLint                      |
+| Command         | What it does               |
+| --------------- | -------------------------- |
+| `npm run dev`   | Start the dev server       |
+| `npm run build` | Production build           |
+| `npm run start` | Serve the production build |
+| `npm run lint`  | Run ESLint                 |
+
+## Notes
+
+- This app is meant to run **locally**, for a single user, on the machine that
+  holds the files. It has no authentication and its API reads the local disk — do
+  not expose it on a public network.
+- All filesystem access is confined to the chosen folder: request paths are
+  resolved strictly within it (with `..`, absolute-path, and symlink-escape
+  guards), so the app can only read files under the folder you selected.

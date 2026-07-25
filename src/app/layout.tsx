@@ -8,7 +8,7 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-geist-sans" });
 export const metadata: Metadata = {
   title: "Construction Document Manager",
   description:
-    "Organize drawings and materials by category, with automatic revision control.",
+    "Scan a local folder of drawings, auto-tag PDFs by title block, and search — all on your machine.",
 };
 
 export default function RootLayout({
@@ -38,7 +38,7 @@ export default function RootLayout({
                 Doc Manager
               </span>
               <span className="hidden text-xs text-slate-400 sm:inline">
-                · Construction Documents
+                · Local · Construction Documents
               </span>
             </Link>
           </div>
