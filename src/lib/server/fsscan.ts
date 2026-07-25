@@ -1,5 +1,5 @@
 import "server-only";
-import { promises as fs } from "node:fs";
+import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 import { getRoot, getAllMeta, type FileMeta } from "@/lib/server/store";
 import type { FolderEntry, FileItem, DirListing, Stats } from "@/lib/types";
@@ -14,7 +14,6 @@ export function isPdf(name: string): boolean {
 /** Normalize a client-supplied relative path to posix, stripping any escape. */
 function normalizeRel(relPath: string | null | undefined): string {
   if (!relPath) return "";
-  // Split on either separator, drop empty / "." / ".." segments entirely.
   const parts = relPath
     .split(/[/\\]+/)
     .filter((s) => s && s !== "." && s !== "..");
@@ -30,8 +29,11 @@ function normalizeRel(relPath: string | null | undefined): string {
 export async function resolveWithinRoot(
   relPath: string | null | undefined
 ): Promise<{ root: string; abs: string; rel: string }> {
-  const root = await getRoot();
-  if (!root) throw new Error("No folder is configured. Set one first.");
+  const rawRoot = await getRoot();
+  if (!rawRoot) throw new Error("No folder is configured. Set one first.");
+  // Normalize defensively: strips a trailing slash / `.` segments that would
+  // otherwise break the containment check for the root itself.
+  const root = path.resolve(rawRoot);
 
   const rel = normalizeRel(relPath);
   const abs = path.resolve(root, rel);
@@ -53,7 +55,6 @@ export async function resolveWithinRoot(
       throw new Error("Path escapes the configured folder.");
     }
   } catch (err) {
-    // realpath throws if the target doesn't exist — surface as not-found upstream.
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error("File or folder does not exist.");
     }
@@ -75,6 +76,54 @@ function crumbsFor(rel: string): FolderEntry[] {
   return crumbs;
 }
 
+type Kind = "dir" | "file" | "other";
+
+/**
+ * Classify a directory entry as folder/file. `readdir(withFileTypes)` is fast,
+ * but on cloud/network filesystems (OneDrive File Provider, SMB, some FUSE
+ * mounts) the entry type comes back UNKNOWN — both isFile() and isDirectory()
+ * are false. In that case we fall back to a stat() call so those files still
+ * show up instead of being silently skipped. Returns the size/mtime too.
+ */
+async function classify(
+  dirAbs: string,
+  d: Dirent
+): Promise<{ kind: Kind; size: number; mtimeMs: number }> {
+  if (d.isDirectory()) return { kind: "dir", size: 0, mtimeMs: 0 };
+  if (d.isFile()) {
+    // Still need size/mtime for files.
+    try {
+      const s = await fs.stat(path.join(dirAbs, d.name));
+      return { kind: "file", size: s.size, mtimeMs: s.mtimeMs };
+    } catch {
+      return { kind: "other", size: 0, mtimeMs: 0 };
+    }
+  }
+  // Unknown type (cloud/network) or symlink — resolve with stat().
+  try {
+    const s = await fs.stat(path.join(dirAbs, d.name));
+    if (s.isDirectory()) return { kind: "dir", size: 0, mtimeMs: 0 };
+    if (s.isFile()) return { kind: "file", size: s.size, mtimeMs: s.mtimeMs };
+  } catch {
+    /* broken symlink / unreadable — skip */
+  }
+  return { kind: "other", size: 0, mtimeMs: 0 };
+}
+
+/** Turn a readdir error into a clear, actionable message. */
+function readdirError(err: unknown): Error {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "EPERM" || code === "EACCES") {
+    return new Error(
+      "Permission denied reading this folder. On macOS, grant your terminal Full Disk Access in System Settings › Privacy & Security."
+    );
+  }
+  if (code === "ENOENT") {
+    return new Error("This folder no longer exists at that path.");
+  }
+  return new Error(`Couldn't read this folder: ${(err as Error).message}`);
+}
+
 /** Merge stored metadata onto a file, treating changed-on-disk entries as stale. */
 function mergeMeta(
   rel: string,
@@ -84,8 +133,6 @@ function mergeMeta(
 ): { title: string | null; tags: string[]; stale: boolean } {
   const meta = all[rel];
   if (!meta) return { title: null, tags: [], stale: false };
-  // Independent ground-truth check: trust stored metadata only if the file's
-  // current size + mtime still match what we saw when we tagged it.
   const fresh = meta.size === size && meta.mtimeMs === mtimeMs;
   if (!fresh) return { title: null, tags: [], stale: true };
   return { title: meta.title, tags: meta.tags, stale: false };
@@ -96,28 +143,29 @@ export async function listDir(relPath: string | null): Promise<DirListing> {
   const { abs, rel } = await resolveWithinRoot(relPath);
   const all = await getAllMeta();
 
-  const dirents = await fs.readdir(abs, { withFileTypes: true });
+  let dirents: Dirent[];
+  try {
+    dirents = await fs.readdir(abs, { withFileTypes: true });
+  } catch (err) {
+    throw readdirError(err);
+  }
+
   const folders: FolderEntry[] = [];
   const files: FileItem[] = [];
 
   for (const d of dirents) {
     if (d.name.startsWith(".")) continue; // skip hidden/system entries
     const childRel = rel ? `${rel}/${d.name}` : d.name;
-    if (d.isDirectory()) {
+    const info = await classify(abs, d);
+    if (info.kind === "dir") {
       folders.push({ name: d.name, relPath: childRel });
-    } else if (d.isFile()) {
-      let stat;
-      try {
-        stat = await fs.stat(path.join(abs, d.name));
-      } catch {
-        continue; // vanished between readdir and stat
-      }
-      const merged = mergeMeta(childRel, stat.size, stat.mtimeMs, all);
+    } else if (info.kind === "file") {
+      const merged = mergeMeta(childRel, info.size, info.mtimeMs, all);
       files.push({
         name: d.name,
         relPath: childRel,
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
+        size: info.size,
+        mtimeMs: info.mtimeMs,
         isPdf: isPdf(d.name),
         title: merged.title,
         tags: merged.tags,
@@ -134,40 +182,37 @@ export async function listDir(relPath: string | null): Promise<DirListing> {
 
 /**
  * Every file under `relPath` (recursively), with metadata. Powers search and
- * the "tag untagged" backfill. Depth-bounded so symlink cycles can't loop.
+ * the "tag untagged" backfill. Depth-bounded so symlink cycles can't loop. The
+ * top-level read surfaces errors; nested subfolders are best-effort so one
+ * unreadable subdir doesn't blank the whole result.
  */
 export async function collectFiles(relPath: string | null): Promise<FileItem[]> {
   const { abs, rel } = await resolveWithinRoot(relPath);
   const all = await getAllMeta();
   const out: FileItem[] = [];
 
-  async function walk(dirAbs: string, dirRel: string, depth: number) {
+  async function walk(dirAbs: string, dirRel: string, depth: number, top: boolean) {
     if (depth > MAX_DEPTH) return;
-    let dirents;
+    let dirents: Dirent[];
     try {
       dirents = await fs.readdir(dirAbs, { withFileTypes: true });
-    } catch {
-      return;
+    } catch (err) {
+      if (top) throw readdirError(err);
+      return; // nested: skip unreadable subfolder
     }
     for (const d of dirents) {
       if (d.name.startsWith(".")) continue;
       const childRel = dirRel ? `${dirRel}/${d.name}` : d.name;
-      const childAbs = path.join(dirAbs, d.name);
-      if (d.isDirectory()) {
-        await walk(childAbs, childRel, depth + 1);
-      } else if (d.isFile()) {
-        let stat;
-        try {
-          stat = await fs.stat(childAbs);
-        } catch {
-          continue;
-        }
-        const merged = mergeMeta(childRel, stat.size, stat.mtimeMs, all);
+      const info = await classify(dirAbs, d);
+      if (info.kind === "dir") {
+        await walk(path.join(dirAbs, d.name), childRel, depth + 1, false);
+      } else if (info.kind === "file") {
+        const merged = mergeMeta(childRel, info.size, info.mtimeMs, all);
         out.push({
           name: d.name,
           relPath: childRel,
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
+          size: info.size,
+          mtimeMs: info.mtimeMs,
           isPdf: isPdf(d.name),
           title: merged.title,
           tags: merged.tags,
@@ -177,7 +222,7 @@ export async function collectFiles(relPath: string | null): Promise<FileItem[]> 
     }
   }
 
-  await walk(abs, rel, 0);
+  await walk(abs, rel, 0, true);
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
@@ -188,36 +233,31 @@ export async function computeStats(): Promise<Stats> {
   const all = await getAllMeta();
   const stats: Stats = { folders: 0, files: 0, pdfs: 0, tagged: 0 };
 
-  async function walk(dirAbs: string, dirRel: string, depth: number) {
+  async function walk(dirAbs: string, dirRel: string, depth: number, top: boolean) {
     if (depth > MAX_DEPTH) return;
-    let dirents;
+    let dirents: Dirent[];
     try {
       dirents = await fs.readdir(dirAbs, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      if (top) throw readdirError(err);
       return;
     }
     for (const d of dirents) {
       if (d.name.startsWith(".")) continue;
       const childRel = dirRel ? `${dirRel}/${d.name}` : d.name;
-      const childAbs = path.join(dirAbs, d.name);
-      if (d.isDirectory()) {
+      const info = await classify(dirAbs, d);
+      if (info.kind === "dir") {
         stats.folders += 1;
-        await walk(childAbs, childRel, depth + 1);
-      } else if (d.isFile()) {
+        await walk(path.join(dirAbs, d.name), childRel, depth + 1, false);
+      } else if (info.kind === "file") {
         stats.files += 1;
         if (isPdf(d.name)) stats.pdfs += 1;
-        let stat;
-        try {
-          stat = await fs.stat(childAbs);
-        } catch {
-          continue;
-        }
-        const merged = mergeMeta(childRel, stat.size, stat.mtimeMs, all);
+        const merged = mergeMeta(childRel, info.size, info.mtimeMs, all);
         if (merged.title || merged.tags.length > 0) stats.tagged += 1;
       }
     }
   }
 
-  await walk(abs, "", 0);
+  await walk(abs, "", 0, true);
   return stats;
 }

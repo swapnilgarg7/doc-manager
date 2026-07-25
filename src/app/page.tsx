@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { getConfig, setRoot, getStats } from "@/lib/api";
+import { getConfig, setRoot, getStats, pickFolder } from "@/lib/api";
 import type { Stats } from "@/lib/types";
 import { ConfigNotice } from "@/components/ConfigNotice";
 import { NameDialog } from "@/components/NameDialog";
@@ -14,7 +14,9 @@ export default function HomePage() {
   const [status, setStatus] = useState<Status>("loading");
   const [root, setRootPath] = useState<string | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState(false); // manual-entry dialog open
+  const [opening, setOpening] = useState(false); // native dialog in flight
+  const [pickError, setPickError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const { root } = await getConfig();
@@ -37,6 +39,27 @@ export default function HomePage() {
     load();
   }, [load]);
 
+  // Primary action: open the OS-native folder dialog. Falls back to manual entry
+  // if the platform has no picker.
+  async function chooseFolder() {
+    setPickError(null);
+    setOpening(true);
+    try {
+      const res = await pickFolder();
+      if ("path" in res) {
+        await setRoot(res.path);
+        await load();
+      } else if ("unsupported" in res) {
+        setPicking(true);
+      }
+      // canceled → do nothing
+    } catch (err) {
+      setPickError(err instanceof Error ? err.message : "Folder picker failed.");
+    } finally {
+      setOpening(false);
+    }
+  }
+
   return (
     <div className="space-y-8">
       <div>
@@ -51,6 +74,11 @@ export default function HomePage() {
 
       {status === "unset" && <ConfigNotice variant="unset" />}
       {status === "missing" && <ConfigNotice variant="missing" />}
+      {pickError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {pickError}
+        </div>
+      )}
 
       {/* Selected-folder panel */}
       {(status === "ok" || status === "missing") && (
@@ -64,9 +92,13 @@ export default function HomePage() {
             </p>
             <p className="truncate font-mono text-sm text-slate-800">{root}</p>
           </div>
-          <button className="btn-secondary" onClick={() => setPicking(true)}>
+          <button
+            className="btn-secondary"
+            onClick={chooseFolder}
+            disabled={opening}
+          >
             <PencilIcon width={15} height={15} />
-            Change folder
+            {opening ? "Opening…" : "Change folder"}
           </button>
         </div>
       )}
@@ -79,12 +111,23 @@ export default function HomePage() {
           <div>
             <p className="font-medium text-slate-700">Choose a folder to scan</p>
             <p className="text-sm text-slate-400">
-              Paste the full path to a folder, e.g. /Users/you/Drawings
+              A folder-picker window will open. Local, network, and cloud
+              (OneDrive/Dropbox) folders all work.
             </p>
           </div>
-          <button className="btn-primary" onClick={() => setPicking(true)}>
+          <button
+            className="btn-primary"
+            onClick={chooseFolder}
+            disabled={opening}
+          >
             <FolderIcon width={16} height={16} />
-            Choose folder
+            {opening ? "Opening picker…" : "Choose folder"}
+          </button>
+          <button
+            className="text-xs text-slate-400 underline hover:text-slate-600"
+            onClick={() => setPicking(true)}
+          >
+            or type the path manually
           </button>
         </div>
       )}
@@ -95,7 +138,7 @@ export default function HomePage() {
 
       <NameDialog
         open={picking}
-        title="Choose folder to scan"
+        title="Enter folder path"
         label="Absolute folder path"
         placeholder="/Users/you/Drawings"
         initialValue={root ?? ""}

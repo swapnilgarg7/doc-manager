@@ -38,6 +38,23 @@ export async function setRoot(root: string): Promise<AppConfig> {
   return body as AppConfig;
 }
 
+/**
+ * Open the OS-native "choose folder" dialog on the local machine.
+ * Resolves to the chosen absolute path, or null if the user canceled.
+ * Throws { unsupported } handling to the caller via a typed result.
+ */
+export async function pickFolder(): Promise<
+  { path: string } | { canceled: true } | { unsupported: true; error: string }
+> {
+  const res = await fetch("/api/pick-folder", { method: "POST" });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 501)
+    return { unsupported: true, error: body?.error ?? "Not supported." };
+  if (!res.ok) throw new Error(body?.error || "Folder picker failed.");
+  if (body?.canceled) return { canceled: true };
+  return { path: body.path as string };
+}
+
 // ---------------------------------------------------------------------------
 // Browsing + search
 // ---------------------------------------------------------------------------
