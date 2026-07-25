@@ -10,13 +10,6 @@ export function documentDisplayName(file: {
   return file.title?.trim() || file.name;
 }
 
-/** Build a link to the browse page for a folder relPath ("" = Home). */
-export function browseHref(relPath: string): string {
-  if (!relPath) return "/";
-  const encoded = relPath.split("/").map(encodeURIComponent).join("/");
-  return `/browse/${encoded}`;
-}
-
 export function formatBytes(bytes: number | null | undefined): string {
   if (!bytes && bytes !== 0) return "—";
   if (bytes === 0) return "0 B";

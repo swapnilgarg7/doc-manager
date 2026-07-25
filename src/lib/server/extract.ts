@@ -6,110 +6,11 @@ import type { DrawingMeta } from "@/lib/types";
 export type { DrawingMeta };
 
 // ---------------------------------------------------------------------------
-// Deterministic PDF text extraction (pdfjs) — pulls the text from the
-// bottom-right title-block region, where drawing titles live.
-// ---------------------------------------------------------------------------
-
-interface TextItemLike {
-  str: string;
-  transform: number[]; // [a, b, c, d, e(x), f(y)]
-}
-
-export async function extractTitleBlockText(
-  data: Uint8Array
-): Promise<{ region: string; full: string }> {
-  // Dynamic import so pdfjs only loads in the Node runtime, not the bundle.
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  // pdfjs transfers (detaches) the buffer it's given, so hand it a private copy
-  // — otherwise the caller's bytes become unusable for later rendering.
-  const loadingTask = pdfjs.getDocument({ data: data.slice() });
-  const doc = await loadingTask.promise;
-
-  try {
-    const page = await doc.getPage(1);
-    const viewport = page.getViewport({ scale: 1 });
-    const { width, height } = viewport;
-    const content = await page.getTextContent();
-    // content.items is (TextItem | TextMarkedContent)[]; only TextItems have `str`.
-    const items = content.items.filter(
-      (it) => "str" in it
-    ) as unknown as TextItemLike[];
-
-    // Title block sits in the bottom-right corner. PDF origin is bottom-left,
-    // so "bottom" means a small y value.
-    const region = items.filter((it) => {
-      const x = it.transform[4];
-      const y = it.transform[5];
-      return x >= width * 0.5 && y <= height * 0.45;
-    });
-
-    // Reading order: top-to-bottom, then left-to-right.
-    region.sort(
-      (a, b) => b.transform[5] - a.transform[5] || a.transform[4] - b.transform[4]
-    );
-
-    const clean = (arr: TextItemLike[]) =>
-      arr
-        .map((it) => it.str)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-    return { region: clean(region), full: clean(items) };
-  } finally {
-    await loadingTask.destroy();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Rasterization fallback — for scanned / image-only PDFs that have no text
-// layer, render page 1 and crop the bottom-right title block to an image the
-// vision model can read (OCR-via-LLM).
-// ---------------------------------------------------------------------------
-
-export async function renderTitleBlockImage(
-  data: Uint8Array
-): Promise<string | null> {
-  try {
-    // mupdf renders reliably in Node (pure WASM, no worker/canvas transfer),
-    // unlike pdfjs's rendering path which breaks once the bundler wraps it.
-    const mupdf = await import("mupdf");
-    const { createCanvas, loadImage } = await import("@napi-rs/canvas");
-
-    // Use a private copy in case an earlier consumer detached the buffer.
-    const doc = mupdf.Document.openDocument(data.slice(), "application/pdf");
-    if (doc.countPages() < 1) return null;
-    const page = doc.loadPage(0);
-    const [x0, y0, x1, y1] = page.getBounds();
-    const w = x1 - x0;
-    const h = y1 - y0;
-    // Render large enough that small title-block text stays legible.
-    const scale = Math.min(3, 2600 / Math.max(w, h));
-    const pixmap = page.toPixmap(
-      mupdf.Matrix.scale(scale, scale),
-      mupdf.ColorSpace.DeviceRGB,
-      false,
-      true
-    );
-    const fullPng = Buffer.from(pixmap.asPNG());
-
-    // Crop the bottom-right quadrant (standard title-block location).
-    const img = await loadImage(fullPng);
-    const sx = Math.floor(img.width * 0.5);
-    const sy = Math.floor(img.height * 0.55);
-    const sw = img.width - sx;
-    const sh = img.height - sy;
-    const crop = createCanvas(sw, sh);
-    crop.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-    return crop.toBuffer("image/png").toString("base64");
-  } catch (err) {
-    console.error("[extract] title-block render failed:", err);
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// AI classification — turns noisy title-block text into a clean title + tags.
+// AI classification — turns a title-block SNIPPET into a clean title + tags.
+//
+// The snippet (either scraped title-block text, or a small cropped image of the
+// bottom-right corner) is produced IN THE BROWSER by pdfjs and posted here. The
+// full PDF is never uploaded — only this snippet reaches the server / Azure.
 // ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `You extract metadata from a construction / engineering drawing.
