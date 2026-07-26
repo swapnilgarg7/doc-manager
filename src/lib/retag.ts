@@ -8,6 +8,8 @@ export interface RetagResult {
   total: number;
   tagged: number;
   failed: number;
+  /** First server-side error message seen (e.g. Azure not configured). */
+  error?: string;
 }
 
 /** Overall ceiling per file (extraction + request + retries) — a stuck file
@@ -52,7 +54,15 @@ export async function tagMany(
     // and must never hang (the timeout guarantees it always resolves).
     let meta = null;
     try {
-      meta = await withTimeout(tagFile(rootKey, node), PER_FILE_TIMEOUT_MS, null);
+      meta = await withTimeout(
+        tagFile(rootKey, node, {
+          onServerError: (m) => {
+            if (!result.error) result.error = m;
+          },
+        }),
+        PER_FILE_TIMEOUT_MS,
+        null
+      );
     } catch {
       meta = null;
     }

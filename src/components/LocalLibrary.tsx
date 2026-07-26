@@ -15,7 +15,7 @@ import {
 import { loadRootHandle, saveRootHandle, clearRootHandle } from "@/lib/idb";
 import { getAllMeta, clearMeta } from "@/lib/metastore";
 import { toView, matchesQuery } from "@/lib/search";
-import { tagFile } from "@/lib/tags";
+import { tagFile, checkTaggingConfig } from "@/lib/tags";
 import { tagMany } from "@/lib/retag";
 import { ConfigNotice } from "./ConfigNotice";
 import { TagBadges } from "./TagBadges";
@@ -51,6 +51,7 @@ export function LocalLibrary() {
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const [configWarning, setConfigWarning] = useState<string | null>(null);
   const [taggingPath, setTaggingPath] = useState<string | null>(null);
   const [retagging, setRetagging] = useState(false);
   const [retagProgress, setRetagProgress] = useState<{
@@ -78,6 +79,17 @@ export function LocalLibrary() {
       setCurrentPath("");
       setQuery("");
       setPhase("ready");
+      // Warn up front if the server can't tag (missing Azure config) — this is
+      // the usual cause of 500s after deploying without setting env vars.
+      checkTaggingConfig().then(({ configured, missing }) => {
+        setConfigWarning(
+          configured
+            ? null
+            : `AI tagging isn't configured on the server${
+                missing.length ? ` (missing: ${missing.join(", ")})` : ""
+              }. Set the AZURE_OPENAI_* environment variables in your deployment (e.g. Vercel → Project → Settings → Environment Variables) and redeploy. Browsing, search, preview and download still work without it.`
+        );
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to read folder.");
       setPhase("empty");
@@ -194,6 +206,9 @@ export function LocalLibrary() {
         setRetagProgress
       );
       if (result.total === 0) setRetagMsg("Every PDF here is already tagged.");
+      else if (result.tagged === 0 && result.error)
+        // Everything failed for the same reason — show it plainly.
+        setRetagMsg(`Tagging failed: ${result.error}`);
       else
         setRetagMsg(
           `Tagged ${result.tagged} of ${result.total} PDF${
@@ -356,6 +371,13 @@ export function LocalLibrary() {
           Change
         </button>
       </div>
+
+      {configWarning && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <p className="font-semibold">AI tagging is unavailable</p>
+          <p className="mt-1 text-amber-700">{configWarning}</p>
+        </div>
+      )}
 
       <StatsRow stats={stats} />
 

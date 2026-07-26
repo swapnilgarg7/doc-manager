@@ -12,10 +12,32 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Per-request ceiling so a hung Azure call can't block a pool worker forever. */
 const REQUEST_TIMEOUT_MS = 45_000;
 
+/** Is AI tagging configured on the server? Reports missing Azure env vars. */
+export async function checkTaggingConfig(): Promise<{
+  configured: boolean;
+  missing: string[];
+}> {
+  try {
+    const res = await fetch("/api/extract-tag", { method: "GET" });
+    if (!res.ok) return { configured: false, missing: ["server unreachable"] };
+    const data = (await res.json()) as {
+      configured: boolean;
+      azure: Record<string, boolean>;
+    };
+    const missing = Object.entries(data.azure ?? {})
+      .filter(([, ok]) => !ok)
+      .map(([k]) => k);
+    return { configured: Boolean(data.configured), missing };
+  } catch {
+    return { configured: false, missing: ["network error"] };
+  }
+}
+
 /** Post a title-block snippet to the server and get back { title, tags }. */
 async function postSnippet(
   body: { fileName: string; text?: string; imageBase64?: string },
-  retries: number
+  retries: number,
+  onServerError?: (message: string) => void
 ): Promise<DrawingMeta | null> {
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
@@ -28,6 +50,13 @@ async function postSnippet(
         signal: controller.signal,
       });
       if (res.ok) return (await res.json()) as DrawingMeta;
+      // Capture the server's error message (e.g. missing Azure config, bad key)
+      // so the UI can show *why* tagging failed instead of a silent 500.
+      const errText = await res
+        .json()
+        .then((b) => (b && typeof b.error === "string" ? b.error : ""))
+        .catch(() => "");
+      if (errText) onServerError?.(errText);
       const transient = res.status === 429 || res.status >= 500;
       if (!transient || attempt >= retries) return null;
     } catch {
@@ -50,7 +79,10 @@ async function postSnippet(
 export async function tagFile(
   rootKey: string,
   node: FileNode,
-  { retries = 4 }: { retries?: number } = {}
+  {
+    retries = 4,
+    onServerError,
+  }: { retries?: number; onServerError?: (message: string) => void } = {}
 ): Promise<DrawingMeta | null> {
   if (!node.isPdf) return null;
 
@@ -79,7 +111,7 @@ export async function tagFile(
     body = { fileName: node.name, imageBase64: image };
   }
 
-  const meta = await postSnippet(body, retries);
+  const meta = await postSnippet(body, retries, onServerError);
   if (meta) {
     // Synchronous localStorage write — persisted the instant this file is tagged.
     setMeta(rootKey, node.relPath, {

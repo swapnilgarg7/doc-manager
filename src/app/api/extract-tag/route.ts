@@ -4,6 +4,25 @@ import { classifyFromText, classifyFromImage } from "@/lib/server/extract";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const present = (v?: string) => Boolean(v && v.trim());
+
+/**
+ * GET /api/extract-tag — health check. Reports which Azure env vars are present
+ * (booleans only, never the values) so the UI can warn clearly when tagging
+ * isn't configured on the server (the common cause of 500s after deploying
+ * without setting env vars).
+ */
+export async function GET() {
+  const azure = {
+    endpoint: present(process.env.AZURE_OPENAI_ENDPOINT),
+    apiKey: present(process.env.AZURE_OPENAI_API_KEY),
+    apiVersion: present(process.env.AZURE_OPENAI_API_VERSION),
+    deployment: present(process.env.AZURE_OPENAI_DEPLOYMENT),
+  };
+  const configured = Object.values(azure).every(Boolean);
+  return NextResponse.json({ configured, azure });
+}
+
 /**
  * POST /api/extract-tag
  * Body: { fileName: string, text?: string, imageBase64?: string }
