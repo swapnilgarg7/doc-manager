@@ -12,12 +12,8 @@ import {
   collectFiles,
   crumbsFor,
 } from "@/lib/fsaccess";
-import {
-  loadRootHandle,
-  saveRootHandle,
-  clearRootHandle,
-  getAllMeta,
-} from "@/lib/idb";
+import { loadRootHandle, saveRootHandle, clearRootHandle } from "@/lib/idb";
+import { getAllMeta, clearMeta } from "@/lib/metastore";
 import { toView, matchesQuery } from "@/lib/search";
 import { tagFile } from "@/lib/tags";
 import { tagMany } from "@/lib/retag";
@@ -75,13 +71,10 @@ export function LocalLibrary() {
     setError(null);
     try {
       const key = h.name;
-      const [tree, savedMeta] = await Promise.all([
-        walkDirectory(h),
-        getAllMeta(key),
-      ]);
+      const tree = await walkDirectory(h);
       setRootKey(key);
       setRoot(tree);
-      setMeta(savedMeta);
+      setMeta(getAllMeta(key)); // synchronous read from localStorage
       setCurrentPath("");
       setQuery("");
       setPhase("ready");
@@ -144,6 +137,7 @@ export function LocalLibrary() {
 
   async function forget() {
     await clearRootHandle();
+    if (rootKey) clearMeta(rootKey);
     setHandle(null);
     setRoot(null);
     setMeta({});

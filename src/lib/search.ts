@@ -3,8 +3,12 @@ import type { FileNode, FileView, FileMeta } from "@/lib/types";
 /** Merge a file with its stored metadata, flagging edits-on-disk as stale. */
 export function toView(file: FileNode, meta?: FileMeta): FileView {
   if (!meta) return { ...file, title: null, tags: [], tagged: false, stale: false };
-  // Independent freshness check: trust metadata only if size + mtime still match.
-  const fresh = meta.size === file.size && meta.lastModified === file.lastModified;
+  // Freshness is keyed on file SIZE, which is stable across sessions and changes
+  // on virtually any real edit. We deliberately do NOT compare lastModified:
+  // cloud-synced files (OneDrive/Dropbox) can get a new local mtime on
+  // re-hydration without any content change, which would wrongly blank every tag
+  // after a reconnect.
+  const fresh = meta.size === file.size;
   if (!fresh) return { ...file, title: null, tags: [], tagged: false, stale: true };
   const tagged = Boolean(meta.title || meta.tags.length > 0);
   return { ...file, title: meta.title, tags: meta.tags, tagged, stale: false };

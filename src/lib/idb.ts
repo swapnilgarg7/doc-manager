@@ -1,18 +1,13 @@
 "use client";
 
-import type { FileMeta } from "@/lib/types";
-
-// All persistence is browser-local (IndexedDB). Two stores:
-//   - "handles": the last picked directory handle, so a return visit can offer a
-//     one-click reconnect (the browser re-asks permission).
-//   - "meta": extracted { title, tags, size, lastModified } per file, keyed by
-//     `${rootKey}::${relPath}` so each write is a single put() with no
-//     read-modify-write race across concurrent tag jobs.
+// The picked directory handle is stored in IndexedDB so a return visit can offer
+// a one-click reconnect (the browser re-asks permission). Handles are the one
+// thing that MUST live in IndexedDB — they can't be serialized to localStorage.
+// Extracted titles/tags live in localStorage instead (see metastore.ts).
 
 const DB_NAME = "docmanager";
 const DB_VERSION = 1;
 const HANDLES = "handles";
-const META = "meta";
 const LAST_ROOT_KEY = "lastRoot";
 
 function openDb(): Promise<IDBDatabase> {
@@ -21,7 +16,6 @@ function openDb(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(HANDLES)) db.createObjectStore(HANDLES);
-      if (!db.objectStoreNames.contains(META)) db.createObjectStore(META);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -75,47 +69,4 @@ export async function loadRootHandle(): Promise<StoredRoot | null> {
 
 export async function clearRootHandle(): Promise<void> {
   await tx(HANDLES, "readwrite", (s) => s.delete(LAST_ROOT_KEY));
-}
-
-// ---------------------------------------------------------------------------
-// Per-file metadata
-// ---------------------------------------------------------------------------
-
-const metaKey = (rootKey: string, relPath: string) => `${rootKey}::${relPath}`;
-
-export async function setMeta(
-  rootKey: string,
-  relPath: string,
-  meta: FileMeta
-): Promise<void> {
-  await tx(META, "readwrite", (s) => s.put(meta, metaKey(rootKey, relPath)));
-}
-
-/** All metadata for one root, as a { relPath: FileMeta } map. */
-export async function getAllMeta(
-  rootKey: string
-): Promise<Record<string, FileMeta>> {
-  const db = await openDb();
-  try {
-    return await new Promise<Record<string, FileMeta>>((resolve, reject) => {
-      const out: Record<string, FileMeta> = {};
-      const prefix = `${rootKey}::`;
-      const range = IDBKeyRange.bound(prefix, `${prefix}￿`);
-      const t = db.transaction(META, "readonly");
-      const req = t.objectStore(META).openCursor(range);
-      req.onsuccess = () => {
-        const cursor = req.result;
-        if (cursor) {
-          const relPath = String(cursor.key).slice(prefix.length);
-          out[relPath] = cursor.value as FileMeta;
-          cursor.continue();
-        } else {
-          resolve(out);
-        }
-      };
-      req.onerror = () => reject(req.error);
-    });
-  } finally {
-    db.close();
-  }
 }

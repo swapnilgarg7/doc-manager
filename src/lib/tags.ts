@@ -5,9 +5,12 @@ import {
   extractTitleBlockText,
   renderTitleBlockImage,
 } from "@/lib/extract-client";
-import { setMeta } from "@/lib/idb";
+import { setMeta } from "@/lib/metastore";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Per-request ceiling so a hung Azure call can't block a pool worker forever. */
+const REQUEST_TIMEOUT_MS = 45_000;
 
 /** Post a title-block snippet to the server and get back { title, tags }. */
 async function postSnippet(
@@ -15,17 +18,23 @@ async function postSnippet(
   retries: number
 ): Promise<DrawingMeta | null> {
   for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       const res = await fetch("/api/extract-tag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
       if (res.ok) return (await res.json()) as DrawingMeta;
       const transient = res.status === 429 || res.status >= 500;
       if (!transient || attempt >= retries) return null;
     } catch {
+      // Timeout/abort or network error — retry unless attempts exhausted.
       if (attempt >= retries) return null;
+    } finally {
+      clearTimeout(timer);
     }
     // Exponential backoff with jitter: ~0.8s, 1.6s, 3.2s, 6.4s.
     await sleep(800 * 2 ** attempt + Math.random() * 400);
@@ -72,7 +81,8 @@ export async function tagFile(
 
   const meta = await postSnippet(body, retries);
   if (meta) {
-    await setMeta(rootKey, node.relPath, {
+    // Synchronous localStorage write — persisted the instant this file is tagged.
+    setMeta(rootKey, node.relPath, {
       title: meta.title,
       tags: meta.tags,
       size: node.size,
